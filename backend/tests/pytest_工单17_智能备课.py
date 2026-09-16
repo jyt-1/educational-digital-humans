@@ -629,3 +629,85 @@ class TestExporterUnit:
         texts = [p.text for p in doc.paragraphs]
         assert any("加粗项" in t for t in texts)
         assert any(r.bold for p in doc.paragraphs for r in p.runs if r.text == "加粗项")
+
+
+# ============================================================ 9. 提示词输出规格
+
+class TestPromptSchema:
+    """守住输出规格：模板没要求的字段，LLM 就不会给。
+
+    回归背景：习题模板原先只要求 qtype/stem/options/answer/analysis/knowledge_point，
+    实测 23 道题 score 全为 None，教师得手工补 23 次分值。
+    """
+
+    @pytest.mark.parametrize("content_type", ["习题", "试题"])
+    def test_question_prompt_requires_score(self, content_type):
+        from app.services.prompts import _USER_TEMPLATES
+
+        template = _USER_TEMPLATES[content_type]
+        assert '"score"' in template, f"{content_type}模板必须要求 LLM 输出 score 字段"
+
+    @pytest.mark.parametrize("content_type", ["习题", "试题"])
+    def test_question_prompt_requires_core_fields(self, content_type):
+        from app.services.prompts import _USER_TEMPLATES
+
+        template = _USER_TEMPLATES[content_type]
+        for field in ("qtype", "stem", "options", "answer", "analysis", "knowledge_point"):
+            assert f'"{field}"' in template, f"{content_type}模板缺少字段 {field}"
+
+    def test_courseware_prompt_requires_bullets_and_notes(self):
+        from app.services.prompts import _USER_TEMPLATES
+
+        template = _USER_TEMPLATES["课件"]
+        # 幻灯片编辑器与 pptx 导出都依赖这三个字段
+        for field in ("title", "bullets", "notes"):
+            assert f'"{field}"' in template
+
+    def test_every_content_type_has_template(self):
+        from app.services.prompts import _USER_TEMPLATES
+        from app.models.lesson import CONTENT_TYPES
+
+        assert set(_USER_TEMPLATES) == set(CONTENT_TYPES)
+
+    def test_exam_spec_sums_to_100(self):
+        """月考试题分项相加必须恰为 100 分。
+
+        回归背景：模板原先手写「总分 100 分」，但列的分值是 10×3+5×4+5×2+3×10=90，
+        LLM 按分项出题得到 90 分的卷子，与卷面声明的总分对不上。
+        """
+        from app.services.prompts import DEFAULT_EXAM_SPEC
+
+        assert sum(n * s for n, s in DEFAULT_EXAM_SPEC.values()) == 100
+
+    def test_exercise_spec_matches_work_order(self):
+        """工单17 规定习题题量：单选10 + 多选5 + 判断5 + 简答3。"""
+        from app.services.prompts import DEFAULT_EXERCISE_SPEC
+
+        assert DEFAULT_EXERCISE_SPEC == {"单选": (10, 2), "多选": (5, 4), "判断": (5, 2), "简答": (3, 10)}
+        assert sum(n * s for n, s in DEFAULT_EXERCISE_SPEC.values()) == 80
+
+    def test_spec_line_reports_consistent_totals(self):
+        from app.services.prompts import _spec_line, DEFAULT_EXAM_SPEC
+
+        line = _spec_line(DEFAULT_EXAM_SPEC)
+        assert "总分 100 分" in line
+        assert "共 23 道" in line
+
+    @pytest.mark.parametrize(
+        ("content_type", "expect_total"),
+        [("习题", "总分 80 分"), ("试题", "总分 100 分")],
+    )
+    def test_built_prompt_states_correct_total(self, content_type, expect_total):
+        """真正送给 LLM 的 prompt 里，声明的总分必须与分项一致。"""
+        from app.services.prompts import build_messages
+
+        messages = build_messages(
+            content_type,
+            subject="人工智能",
+            course_name="人工智能导论",
+            chapter="第3章",
+            knowledge_points=["反向传播"],
+            difficulty="中等",
+            objectives=[],
+        )
+        assert expect_total in messages[1]["content"]

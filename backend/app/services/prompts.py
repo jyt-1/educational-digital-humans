@@ -14,8 +14,30 @@ from app.models.lesson import CONTENT_TYPES
 MARKDOWN_TYPES = ("教案", "案例")
 JSON_TYPES = ("课件", "习题", "试题")
 
-# 习题规格（工单17 要求：单选10 + 多选5 + 判断5 + 简答3）
-DEFAULT_EXERCISE_SPEC = {"单选": 10, "多选": 5, "判断": 5, "简答": 3}
+# 题量规格：题型 -> (题量, 每题分值)。模板中的「题量要求」整句由 _spec_line 生成，
+# 避免手写文案与分值各说各话（曾出现试题写「总分 100 分」但分项相加只有 90 分）。
+# 习题规格来自工单17：单选10 + 多选5 + 判断5 + 简答3。
+DEFAULT_EXERCISE_SPEC: dict[str, tuple[int, int]] = {
+    "单选": (10, 2),
+    "多选": (5, 4),
+    "判断": (5, 2),
+    "简答": (3, 10),
+}
+# 月考试题规格，分项相加恰为 100 分
+DEFAULT_EXAM_SPEC: dict[str, tuple[int, int]] = {
+    "单选": (10, 4),
+    "多选": (5, 4),
+    "判断": (5, 2),
+    "简答": (3, 10),
+}
+
+
+def _spec_line(spec: dict[str, tuple[int, int]]) -> str:
+    """由规格生成「题量要求」整句，题量与总分一并算出。"""
+    parts = [f"{qtype} {count} 道（每题 {score} 分）" for qtype, (count, score) in spec.items()]
+    total_count = sum(count for count, _ in spec.values())
+    total_score = sum(count * score for count, score in spec.values())
+    return f"{'、'.join(parts)}，共 {total_count} 道，总分 {total_score} 分"
 
 SYSTEM_PROMPT = """你是一位资深的高职院校专业课教师与教学设计专家，正在为「人工智能」相关专业课程编写教学材料。
 
@@ -68,7 +90,12 @@ def build_messages(
     if extra:
         context += f"\n补充要求：{extra}"
 
-    user_prompt = _USER_TEMPLATES[content_type].format(context=context)
+    # 五个模板共用一次 format：非题目类模板不含 spec 占位符，多余的关键字参数会被忽略
+    user_prompt = _USER_TEMPLATES[content_type].format(
+        context=context,
+        exercise_spec=_spec_line(DEFAULT_EXERCISE_SPEC),
+        exam_spec=_spec_line(DEFAULT_EXAM_SPEC),
+    )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
@@ -123,7 +150,7 @@ _TEMPLATE_EXERCISES = """请为以下课程编写一套 **课后习题**。
 {context}
 
 输出**严格的 JSON 数组**，不要输出任何解释文字、不要用 Markdown 代码块包裹。
-题量要求：单选题 10 道、多选题 5 道、判断题 5 道、简答题 3 道，共 23 道。
+题量要求：{exercise_spec}。
 每道题的结构如下：
 [
   {{
@@ -133,6 +160,7 @@ _TEMPLATE_EXERCISES = """请为以下课程编写一套 **课后习题**。
     "answer": "B",
     "analysis": "解析：说明为什么选 B，以及其余选项错在哪里",
     "knowledge_point": "本题对应的知识点名称",
+    "score": 2,
     "difficulty": "简单"
   }}
 ]
@@ -141,7 +169,8 @@ _TEMPLATE_EXERCISES = """请为以下课程编写一套 **课后习题**。
 1. qtype 只能是「单选」「多选」「判断」「简答」之一。
 2. 判断题的 options 固定为 ["A. 正确", "B. 错误"]，answer 为 "A" 或 "B"。
 3. 简答题 options 为 null，answer 为完整的参考答案要点。
-4. 每道题必须给出 analysis 与 knowledge_point，difficulty 取值「简单」「中等」「困难」。"""
+4. 每道题必须给出 score（分值）、analysis（解析）与 knowledge_point，
+   difficulty 取值「简单」「中等」「困难」。"""
 
 _TEMPLATE_CASE = """请为以下课程编写一个**教学案例**（企业级实战案例）。
 
@@ -168,8 +197,7 @@ _TEMPLATE_EXAM = """请为以下课程编写一套 **月考试题**。
 {context}
 
 输出**严格的 JSON 数组**，不要输出任何解释文字、不要用 Markdown 代码块包裹。
-题量要求：单选题 10 道（每题 3 分）、多选题 5 道（每题 4 分）、判断题 5 道（每题 2 分）、
-简答题 3 道（每题 10 分），总分 100 分。
+题量要求：{exam_spec}。
 每道题的结构如下：
 [
   {{
