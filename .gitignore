@@ -1,0 +1,32 @@
+# 密钥与配置
+.env
+.env.local
+
+# 数据与上传（运行时产物）
+data/
+uploads/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.local
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# 日志与临时
+*.log
+*.tmp

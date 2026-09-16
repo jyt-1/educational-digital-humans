@@ -1,0 +1,241 @@
+# CLAUDE.md — 教育智能体平台（阶段一：工单 16~20）
+
+> 本文件是项目"宪法"。你在本项目的每次会话都必须先遵守本文件；若工单原文与本文件冲突，以工单原文为准并提醒用户。
+
+## 1. 你的角色与总目标
+
+你是本项目的全栈工程师，从 0 到 1 搭建"AI 教学智能体"Web 平台。需求唯一来源是 `docs/requirements/` 下的 5 个工单，按 **16 → 17 → 18 → 19 → 20** 顺序开发（工单 19 的题库来自工单 17 的试题生成，不可颠倒）。
+
+四个功能域：
+- **智能备课**（工单17）：教案/课件/习题/案例/试题自动生成、编辑、版本管理与回溯、导出 docx/pptx
+- **智能助教**（工单18）：多模态文档上传解析、公共/私有知识库、混合检索+重排、带引用的流式问答
+- **个性化学习推荐**（工单19）：知识图谱、学生画像、学习路径推荐、自适应练习、AIGC 错题本
+- **面试 AI 复盘**（工单20）：Excel 批量导入、录音上传转写、LLM 复盘分析
+
+### 阶段划分（**严格串行，前一阶段全部验收后才启动下一阶段**）
+
+- **阶段一 = 当前唯一任务**：纯文本 Web 系统（"AI 教学大脑"），即工单 16→17→18→19→20。
+  **五个工单全部完成并通过验收之前，禁止开始任何数字人形象层工作，禁止提前引入 TTS / Avatar / 口型相关依赖与代码。**
+- 阶段二 = 数字人形象层：前端 2D 虚拟形象 + TTS + 音量驱动口型；数字人层抽象为可替换 provider（形象驱动 / TTS 各一个接口 + 一个本地实现）
+- 阶段三 = 接入云端数字人 API（臻灵 / 讯飞虚拟人），理论上只改 provider 配置
+- 阶段四 = 实时全双工教学对话（不在范围）
+
+> 阶段划分依据：`教育数字人竞品调研.md` 结论——形象层"已是成熟商品，不构成任何壁垒"，自研价值在教育层；市场唯一空缺是"实时视频对话 + **背后有真正的教学策略和学情闭环**"，其"背后"部分正是阶段一范围。
+>
+> **注意**：ASR（faster-whisper）属于**阶段一**，不是阶段二——工单 20 的验收标准就是"输入一段面试录音，输出分析内容"，没有 ASR 无法验收。
+
+## 2. 硬性约束（每次会话开工前自查）
+
+1. **开发机无独立显卡**（Intel Core Ultra 5 125H / 32GB 内存 / Arc 核显，已实测 `torch 2.13.0+cpu`、`cuda_available=False`）。严格按第 5 节算力策略执行。**禁止**安装或运行任何需要 CUDA 的组件：MuseTalk、LiveTalking、GPU 版 torch、本地 bge-m3、whisper medium/large。
+2. **文件头注释含工单编号**（验收硬指标）：每个源码文件第一行注释必须**同时**含 `[工单XX]` 标记与工单完整编号（工单备注原文要求"代码注释需包括工单编号"，而工单编号字段值即完整编号）。例：
+   ```python
+   # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 教案生成服务
+   ```
+   ```html
+   <!-- [工单18] 人工智能NLP-Agent数字人项目-教育智能体-智能助教任务 —— 问答页面 -->
+   ```
+3. **测试伴随**：每个功能模块同步编写 pytest 用例（`backend/tests/pytest_工单XX_功能.py`），完成的定义 = 功能可演示 + 测试全绿。
+4. **小步提交**：每完成一个接口/页面执行 `git commit -m "[工单XX] 简述"`。
+   ⚠️ **前置动作**：本仓库当前**尚未 `git init`**。首次开发前必须先 `git init`，并**先创建 `.gitignore` 再首次 commit**（见第 5 条）。
+5. **密钥只进 .env**：任何 API Key 不写入代码、不进 git；`.gitignore` 必须先于首次 commit 创建，至少包含 `.env`、`data/`、`uploads/`、`__pycache__/`、`node_modules/`、`dist/`。
+
+## 3. 技术栈（钉死，未经用户明确同意不得更换）
+
+| 层 | 选型 |
+| --- | --- |
+| 后端 | Python 3.11+ / FastAPI / SQLAlchemy 2.x / SQLite（开发期足够） |
+| 前端 | Vue 3 + Vite + Element Plus + ECharts + axios |
+| 认证 | 轻量 JWT（python-jose 或 PyJWT）+ 角色字段 `teacher` / `student`；users 表见第 8.0 节 |
+| LLM | OpenAI 兼容接口（DeepSeek chat / Qwen），用 openai SDK 统一封装，base_url 走 .env |
+| Embedding | 云端 API（硅基流动 BAAI/bge-m3 或阿里 text-embedding-v3）；本地兜底 BAAI/bge-small-zh-v1.5（CPU 可跑） |
+| 重排序 | 云端 API（BAAI/bge-reranker-v2-m3），开发期可用 RERANK_ENABLED=false 关闭 |
+| 向量库 | ChromaDB（persist_directory 指向 ./data/chroma） |
+| ASR | faster-whisper，模型固定 `small` + int8 量化，纯 CPU（**属于阶段一**，工单 20 必需） |
+| 导出 | python-docx（教案/习题/试题）、python-pptx（课件） |
+| 测试 | pytest + httpx（FastAPI TestClient） |
+
+> 阶段二才会引入：TTS（云端 API / Edge-TTS）、前端 2D 形象驱动、provider 抽象层。**阶段一不得引入。**
+
+## 4. 目录结构（按此创建，新文件放对位置）
+
+```
+Education-agent/
+├── CLAUDE.md                  ← 本文件
+├── .env / .env.example        ← 密钥与配置（example 提交，.env 不提交）
+├── docs/
+│   ├── requirements/          ← 5 个工单原文（唯一需求来源，已就位）
+│   ├── 设计文档-工单16.md      ← 工单16 产出
+│   └── evidence/工单XX/       ← 每工单验收截图/录屏
+├── backend/
+│   ├── app/
+│   │   ├── main.py            ← FastAPI 入口，挂 CORS（前端 5173）
+│   │   ├── config.py          ← pydantic-settings 读 .env
+│   │   ├── db.py              ← engine/Session
+│   │   ├── auth.py            ← JWT 签发/校验 + 角色依赖注入（阶段一共用）
+│   │   ├── models/            ← SQLAlchemy 模型（按工单分文件，user.py 共用）
+│   │   ├── schemas/           ← Pydantic 模型
+│   │   ├── api/               ← 路由：auth/ lesson/ assistant/ learn/ interview/
+│   │   └── services/          ← 业务逻辑；llm_client.py / rag.py / asr.py 统一封装
+│   ├── tests/                 ← pytest，文件名 pytest_工单XX_功能.py
+│   └── requirements.txt
+├── frontend/
+│   └── src/
+│       ├── api/               ← axios 实例与各模块 api
+│       ├── views/lesson/ assistant/ learn/ interview/
+│       ├── router/  store/  components/
+│       └── App.vue            ← 侧边栏导航四模块
+├── data/                      ← SQLite + Chroma 持久化（gitignore）
+└── uploads/                   ← 上传文档与录音（gitignore）
+```
+
+## 5. 算力策略（无 GPU，本地只跑业务逻辑）
+
+| 能力 | 执行方案 |
+| --- | --- |
+| LLM 生成/分析 | 云端 DeepSeek/Qwen API |
+| Embedding | 云端 API（.env：EMBEDDING_PROVIDER=api）；离线兜底本地 bge-small-zh-v1.5 |
+| 重排序 | 云端 API；开发期 RERANK_ENABLED=false 先跳过，验收前开启 |
+| ASR 转写 | 本地 faster-whisper small + int8（14 核 CPU 接近实时，够用） |
+| 数字人渲染 | **阶段一不做**；阶段二用前端 2D 形象 + TTS + 音量驱动口型（零 GPU） |
+
+所有模型名、base_url、开关全部走 .env，代码中不得硬编码。
+
+## 6. .env.example（初始化项目当天生成）
+
+```ini
+# LLM
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_API_KEY=sk-xxx
+LLM_MODEL=deepseek-chat
+
+# Embedding（api=云端 local=本地bge-small-zh-v1.5）
+EMBEDDING_PROVIDER=api
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+EMBEDDING_API_KEY=sk-xxx
+EMBEDDING_MODEL=BAAI/bge-m3
+
+# 重排序（开发期可 false）
+RERANK_ENABLED=false
+RERANK_BASE_URL=https://api.siliconflow.cn/v1
+RERANK_API_KEY=sk-xxx
+RERANK_MODEL=BAAI/bge-reranker-v2-m3
+
+# ASR（无GPU，禁止 medium/large）
+WHISPER_MODEL=small
+
+# 认证
+JWT_SECRET=change-me-in-prod
+JWT_EXPIRE_MINUTES=10080
+
+# Windows 必须：HuggingFace 镜像
+HF_ENDPOINT=https://hf-mirror.com
+
+# 应用
+DATA_DIR=./data
+UPLOAD_DIR=./uploads
+```
+
+## 7. 每个工单的标准工作流
+
+1. **读工单**：会话第一步读 `docs/requirements/工单XX-*.md`，向用户复述将实现的功能清单与验收标准，确认后再动手。
+2. **先方案后代码**：涉及表结构/新模块时，先给出方案（表字段、接口清单、前端页面改动），用户确认后编码。
+3. **实现**：遵守第 2 节硬约束与第 9 节红线。
+4. **自测**：pytest 全绿；`uvicorn app.main:app --reload` 与 `npm run dev` 起服务，请用户浏览器验收。
+5. **提交**：`git commit -m "[工单XX] 简述"`。
+6. **留证**：提醒用户截图/录屏存入 `docs/evidence/工单XX/`。
+
+## 8. 工单开发要点速览（详细要求以工单原文为准）
+
+### 8.0 跨工单共性：用户体系（阶段一必备）
+
+工单18 要求"分别为教师、学生构建不同的知识库"、私有库按用户隔离；工单19 有 `student_id`；工单20 有"上报人（教师/学生）"。因此阶段一必须实现轻量用户体系：
+
+- `users` 表：`id / username / password_hash / role('teacher'|'student') / display_name / created_at`
+- 接口：`POST /api/auth/register`、`POST /api/auth/login`（返回 JWT）、`GET /api/auth/me`
+- 依赖注入：`get_current_user()`、`require_role('teacher')`
+- 公共知识库不校验归属；私有知识库所有读写强制按 `user_id` 过滤
+
+### 工单 16（1 人日）· 需求分析与功能设计 —— 纯文档
+
+产出 `docs/设计文档-工单16.md`，**严格按工单原文六章**（章节名不得改写、不得增删）：
+
+一、项目背景
+二、需求分析（1. 目标用户、2. 主要功能场景）
+三、软件设计架构（1. 总体架构[含架构图]、2. 详细分层说明）
+四、各场景技术选型分析（至少覆盖 备课生成 / RAG检索 / 推荐引擎 / ASR 四个场景，含选型对比表）
+五、数据安全与合规
+六、实施建议（各核心功能所需资源规划 + 工时安排，对齐 16~20 共 **9 人日**）
+
+接口定义（全部接口清单）与数据库设计（E-R + 建表 SQL）作为**第三章"详细分层说明"下的子内容**写入，**不得挤掉第五、六章**。
+
+验收标准：各章节内容符合高职院校/K12 用户核心痛点及 AIGC 主流技术选型要求。
+后续 4 个工单实现必须与本文档一致；实现中发现设计不妥，先改本文档再改码。
+
+### 工单 17（2 人日）· 智能备课
+
+- 表：teaching_plans / coursewares / exercises / exam_questions（LLM 生成内容存 JSON，支持二次编辑）；**另需版本快照表 plan_versions（版本管理+历史回溯+回滚，工单明确要求）**
+- 内容类型：**教案 / 课件 / 习题 / 案例 / 试题**（工单正文列了"案例"，产出物列了"月考试题"，两者都要有）
+- 接口：`POST /api/lesson/generate`（type=教案|课件|习题|案例|试题；入参学科/课程/知识点/难度；SSE 流式返回）+ 保存/列表/详情/版本列表/回滚/导出
+- 导出：教案与习题 docx、课件 pptx、试题 docx，接口返回文件流
+- 前端 `/lesson`：生成表单 → 流式渲染 → 在线编辑 → 版本管理 → 导出
+- **本工单已确认降级项**（用户 2026-09-16 决策，需在提交说明中注明）：
+  - 多教师协同编辑（WebSocket + Yjs）**不做**——单用户演示场景下无意义，投入产出比低
+  - "一键推送到教学管理平台"**降级为导出文件下载**
+  - 保留：版本管理 + 历史回溯 + 回滚（工单明确要求，成本低）
+- 验收：四类以上内容均可生成、编辑保存、版本可回滚、导出内容与编辑一致
+
+### 工单 18（2 人日）· 智能助教
+
+- **文档格式范围（按工单原文，不可缩窄）**：PDF、DOC/DOCX、PPT/PPTX、XLS/XLSX、图像，统一解析入库
+- **多模态内容（工单核心要求）**：图像、表格、公式需专门处理，检索结果中支持多模态内容的输出及引用原文；表格转 Markdown 存储，图片存 `uploads/kb/` 并记录路径供引用回显，公式保留原文位置与上下文
+- 解析分块（约 500 字、重叠 80）入库 Chroma，元数据记录文件名/页码/段落号
+- 知识库：public（全用户共享）与 private（按用户隔离）两类，**按 8.0 节用户体系实现隔离**
+- 检索：向量召回 + 关键词召回混合；RERANK_ENABLED=true 时叠加云端重排；返回 top5 带引用
+- 问答：SSE 流式；答案内嵌 [1][2] 角标；底部展示引用来源（文件名+页码）
+- 参考：工单备注给出的 HKUDS/RAG-Anything（`https://github.com/HKUDS/RAG-Anything`）。**注意其依赖 MinerU，纯 CPU 跑 OCR 极慢**；开发期用 PyMuPDF/python-docx/python-pptx/openpyxl 自研解析，公式与复杂版面降级为"保留原文位置 + 引用回显"
+- 验收：上传指定 PDF 后提问，返回带正确引用的流式答案；能检索到指定页的表格
+
+### 工单 19（2 人日）· 个性化学习推荐
+
+- 表：knowledge_points（prereq_id 自关联成图谱；内置"人工智能导论"40+ 知识点及先修链，如 矩阵运算→神经网络→反向传播→梯度下降）、questions（复用 工单17 生成题）、attempts、student_profile（mastery 0~1）、mistake_book
+- 画像：按知识点加权正确率，时间衰减（7天内权重1.0 / 30天0.7 / 更早0.4）；**支持"导入历史成绩"初始化画像**（工单要求）
+- 路径推荐：mastery<0.6 的薄弱点沿图谱上溯到最先修薄弱点，输出推荐顺序 + 可解释理由
+- 自适应练习：连续答对 3 题升难度档，答错降档
+- AIGC 错题本：答错触发 LLM 分析（深入浅出解析 + 错误原因诊断 + 2~3 道同知识点变式题带答案）；变式题可再答，再错重新分析
+- **联动助教问题库**：基于错题内容及助教侧常用问题推荐学习内容与练习题（工单验收标准第 4 条）
+- 前端 `/learn`：掌握度雷达图 + 学习路径时间线 + 练习页（即时反馈）+ 错题本
+- 验收：答题→画像更新→推荐路径三连正确；答错生成解析与变式题
+
+### 工单 20（2 人日）· 面试 AI 复盘
+
+- 表：interviews（学生/岗位名称/面试轮次/面试形式/城市/面试时间/上报人/上报时间/录音路径/状态[待完善|已复盘]）、reviews
+- Excel 批量导入（openpyxl，列：学生|岗位名称|轮次|形式|城市|时间|备注）+ 模板下载接口；导入返回逐行成功/失败明细
+- **上报与编辑规则（工单要求）**：数据可由教师（就业指导）批量导入，也可由学生**自助填报**；学生可修改**两天内且状态为"待完善"**的记录，修改后"上报人"**变更为该学生姓名**
+- 录音上传：mp3/wav/m4a，≤50MB，存 uploads/audio
+- 复盘管线（异步）：faster-whisper small+int8 转写（带说话人轮次）→ LLM 输出 JSON{总分0-100、总体评价、自我介绍点评、questions:[{问题,回答,得分,点评,优化版回答}]、修改建议[]} → 存 reviews，状态改"已复盘"
+- 前端 `/interview`：列表页（工单要求全字段；仅有录音的行显示"AI复盘"按钮；导入按钮+模板下载）+ 详情页四区（总体评价卡片/逐题解析/对话左右对照[左AI优化版右原始记录]/修改建议）
+- 验收：导入→上传录音→触发复盘→详情页四区完整展示
+
+## 9. Windows 与工程红线
+
+- Python 一切文件读写显式 `encoding="utf-8"`；终端乱码先 `chcp 65001`
+- pip 走清华源：`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple`；npm 走 npmmirror
+- HuggingFace 必配 `HF_ENDPOINT=https://hf-mirror.com`（whisper/bge 模型下载都靠它）
+- 安装 faster-whisper 若连带拉取 CUDA 版 torch：立即停止，改用 CPU 源（`pip install torch --index-url https://download.pytorch.org/whl/cpu`）。**本机现已是 `torch 2.13.0+cpu`，勿升级为 CUDA 版**
+- LLM 返回 JSON 必须容错：统一封装"失败重试 1 次 + 正则提取首个 {} 块宽松解析"；DeepSeek 可加 `response_format={'type':'json_object'}`
+- 前端开发跨域：Vite `server.proxy` 把 `/api` 代理到 `http://localhost:8000`
+- 会话过长用 `/compact` 压缩；一天没做完次日 `claude --continue` 续接
+
+## 10. 完成定义（DoD，五条全满足才算完成一个工单）
+
+1. 功能按工单验收标准可现场演示
+2. pytest 全绿，覆盖该工单核心接口
+3. 所有新增源文件头部注释含工单编号（含 `[工单XX]` 与完整编号，见第 2 节第 2 条）
+4. git 提交记录带 `[工单XX]` 前缀
+5. `docs/evidence/工单XX/` 有截图或录屏
+
+## 11. 已知缺口（待用户补充，不影响阶段一开工）
+
+1. **《教学场景智能体设计.pdf》不在仓库中**——工单 17/18/19 均以"根据《教学场景智能体设计.pdf》中的各个核心模块的流程梳理"为依据，但该附件缺失。目前以工单原文正文为准；用户提供后需回补核对。
+2. **sentence-transformers 当前不可用**（`numpy.core.multiarray failed to import`，numpy 2.x 与编译扩展冲突）。仅影响"离线兜底本地 bge-small-zh-v1.5"，主路径走云端 Embedding API 不受影响；需要时再修 numpy 版本。
+3. **faster-whisper 未安装**，工单 20 开工前需安装。
