@@ -224,6 +224,7 @@ UPLOAD_DIR=./uploads
 - 安装 faster-whisper 若连带拉取 CUDA 版 torch：立即停止，改用 CPU 源（`pip install torch --index-url https://download.pytorch.org/whl/cpu`）。**本机现已是 `torch 2.13.0+cpu`，勿升级为 CUDA 版**
 - LLM 返回 JSON 必须容错：统一封装"失败重试 1 次 + 正则提取首个 {} 块宽松解析"；DeepSeek 可加 `response_format={'type':'json_object'}`
 - 前端开发跨域：Vite `server.proxy` 把 `/api` 代理到 `http://localhost:8000`
+- **pytest 配置禁用 `pytest.ini`**：iniconfig 用系统编码（中文 Windows 为 GBK）读 .ini，中文注释会 `UnicodeDecodeError: 'gbk' codec can't decode`。配置统一写在 `backend/pyproject.toml`（TOML 按 UTF-8 解析）。同时 `python_files` 必须含 `pytest_*.py` —— CLAUDE.md 硬约束 3 要求的文件名不匹配 pytest 默认的 `test_*.py`，不配置会"no tests ran"
 - 会话过长用 `/compact` 压缩；一天没做完次日 `claude --continue` 续接
 
 ## 10. 完成定义（DoD，五条全满足才算完成一个工单）
