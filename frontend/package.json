@@ -1,0 +1,24 @@
+{
+  "name": "edu-agent-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "[工单17] 人工智能NLP-Agent数字人项目-教育智能体 —— 前端",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "echarts": "^5.5.1",
+    "element-plus": "^2.8.4",
+    "marked": "^14.1.2",
+    "vue": "^3.5.11",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.1.4",
+    "vite": "^5.4.8"
+  }
+}

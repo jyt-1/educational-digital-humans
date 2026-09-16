@@ -1,0 +1,128 @@
+/* [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 全局样式 */
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+  background: #f5f7fa;
+  color: #303133;
+}
+
+.app-layout {
+  display: flex;
+  height: 100%;
+}
+
+.app-aside {
+  width: 220px;
+  flex-shrink: 0;
+  background: #001529;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.app-logo {
+  padding: 18px 20px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.app-logo small {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.55;
+  margin-top: 4px;
+  letter-spacing: 0;
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-header {
+  height: 56px;
+  flex-shrink: 0;
+  background: #fff;
+  border-bottom: 1px solid #e4e7ed;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+}
+
+.app-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.page-card {
+  background: #fff;
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.stream-box {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 6px;
+  padding: 14px;
+  min-height: 260px;
+  max-height: 460px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.rendered-md {
+  line-height: 1.8;
+}
+
+.rendered-md table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.rendered-md th,
+.rendered-md td {
+  border: 1px solid #dcdfe6;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.rendered-md th {
+  background: #f5f7fa;
+  font-weight: 600;
+}
+
+.rendered-md h1,
+.rendered-md h2,
+.rendered-md h3 {
+  margin: 16px 0 8px;
+}
+
+.rendered-md code {
+  background: #f0f2f5;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: Consolas, Monaco, monospace;
+}
