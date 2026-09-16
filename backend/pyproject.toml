@@ -1,0 +1,22 @@
+# [工单17] 人工智能NLP-Agent数字人项目-教育智能体 —— 后端项目配置
+# 说明：pytest 配置必须放在 pyproject.toml 而非 pytest.ini。
+# 项目规范（CLAUDE.md 硬约束3）要求测试文件命名为 pytest_工单XX_功能.py，
+# 该命名不符合 pytest 默认收集规则，需显式声明 python_files。
+# 另外：iniconfig 读取 .ini 时使用系统编码（Windows 下为 GBK），
+# 含中文注释的 pytest.ini 会直接抛 UnicodeDecodeError；
+# pyproject.toml 按 UTF-8 解析，无此问题。
+
+[project]
+name = "edu-agent-backend"
+version = "0.1.0"
+description = "教育智能体平台 · 阶段一（工单16~20）后端"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["pytest_*.py", "test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning"]
