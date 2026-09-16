@@ -102,28 +102,17 @@
             <el-button style="margin-top: 8px" @click="addSlide">＋ 新增一页</el-button>
           </template>
 
-          <!-- 习题 / 试题：结构化编辑（第二版提交实现，先只读预览） -->
+          <!-- 习题 / 试题：结构化编辑 -->
           <template v-else>
-            <el-alert
-              type="info"
-              :closable="false"
-              style="margin-bottom: 12px"
-              title="结构化题目编辑将在下一版提交中提供；当前可导出 docx 查看完整题目。"
-            />
-            <div v-for="(q, i) in content.items" :key="i" class="q-card">
-              <div class="q-stem">
-                {{ i + 1 }}. {{ q.stem }}
-                <el-tag v-if="q.qtype" size="small" style="margin-left: 6px">{{ q.qtype }}</el-tag>
-                <el-tag v-if="q.score" size="small" type="warning" style="margin-left: 4px">
-                  {{ q.score }} 分
-                </el-tag>
-              </div>
-              <ul v-if="q.options?.length" class="q-options">
-                <li v-for="(opt, k) in q.options" :key="k">{{ opt }}</li>
-              </ul>
-              <div class="q-answer">答案：{{ q.answer || '—' }}</div>
-              <div v-if="q.analysis" class="q-analysis">解析：{{ q.analysis }}</div>
-            </div>
+            <el-alert type="info" :closable="false" style="margin-bottom: 12px">
+              <template #title>
+                <span style="font-size: 12px">
+                  共 <strong>{{ content.items.length }}</strong> 道题。
+                  保存时会同步刷新题目表，工单19 自适应练习抽取的就是这里的题目。
+                </span>
+              </template>
+            </el-alert>
+            <QuestionEditor :items="content.items" @change="dirty = true" />
           </template>
         </div>
       </el-col>
@@ -194,6 +183,7 @@ import {
   rollbackVersion,
   updatePlan,
 } from '@/api/lesson'
+import QuestionEditor from '@/components/QuestionEditor.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -216,15 +206,16 @@ const plan = reactive({
   current_version: 0,
 })
 
-// 统一内容结构：{ raw: string, items: [] }
-const content = reactive({ raw: '', items: [] })
+// 统一内容结构：{ format, raw: string, items: [] }
+// format 由后端 build_content_payload 写入（markdown|json），保存时必须原样带回，否则会丢
+const content = reactive({ format: '', raw: '', items: [] })
 const versions = ref([])
 
 const isTextType = computed(() => ['教案', '案例'].includes(plan.content_type))
 const isSlideType = computed(() => plan.content_type === '课件')
-const isQuestionType = computed(() => ['习题', '试题'].includes(plan.content_type))
 
 const editorTitle = computed(() => {
+  if (plan.content_type === '案例') return '案例正文（Markdown）'
   if (isTextType.value) return '教案正文（Markdown）'
   if (isSlideType.value) return '课件页面'
   return '题目列表'
@@ -266,6 +257,18 @@ function formatTime(value) {
   return String(value).replace('T', ' ').slice(0, 16)
 }
 
+/** 把后端返回的 content 装配进可编辑状态。加载详情与版本回滚共用。 */
+function applyContent(payload) {
+  const data = typeof payload === 'string' ? { raw: payload } : payload || {}
+  content.format = data.format || ''
+  content.raw = data.raw || ''
+  content.items = (data.items || []).map((item) => ({
+    ...item,
+    bulletsText: bulletsToText(item.bullets), // 幻灯片要点：编辑态用「每行一条」
+    notes: item.notes || '',
+  }))
+}
+
 async function load() {
   loading.value = true
   try {
@@ -281,13 +284,7 @@ async function load() {
       current_version: detail.current_version,
     })
 
-    const payload = detail.content || {}
-    content.raw = typeof payload === 'string' ? payload : payload.raw || ''
-    content.items = (payload.items || []).map((item) => ({
-      ...item,
-      bulletsText: bulletsToText(item.bullets),
-      notes: item.notes || '',
-    }))
+    applyContent(detail.content)
 
     versions.value = await listVersions(planId)
     dirty.value = false
@@ -304,7 +301,11 @@ async function handleSave() {
   try {
     // 幻灯片把 bulletsText 拆好的数组提交，不把编辑用的临时字段带进库
     const items = content.items.map(({ bulletsText, ...rest }) => rest)
-    const detail = await updatePlan(planId, { raw: content.raw, items }, '教师手动编辑')
+    const detail = await updatePlan(
+      planId,
+      { format: content.format, raw: content.raw, items },
+      '教师手动编辑',
+    )
     Object.assign(plan, { current_version: detail.current_version })
     versions.value = await listVersions(planId)
     dirty.value = false
@@ -331,13 +332,7 @@ async function handleRollback(version) {
   try {
     const detail = await rollbackVersion(planId, version.id)
     Object.assign(plan, { current_version: detail.current_version })
-    const payload = detail.content || {}
-    content.raw = typeof payload === 'string' ? payload : payload.raw || ''
-    content.items = (payload.items || []).map((item) => ({
-      ...item,
-      bulletsText: bulletsToText(item.bullets),
-      notes: item.notes || '',
-    }))
+    applyContent(detail.content)
     versions.value = await listVersions(planId)
     dirty.value = false
     ElMessage.success(`已回滚，生成新版本 v${detail.current_version}`)
@@ -382,33 +377,4 @@ onMounted(load)
   margin-bottom: 8px;
 }
 
-.q-card {
-  border-left: 3px solid #409eff;
-  background: #fafafa;
-  padding: 10px 14px;
-  margin-bottom: 12px;
-  border-radius: 0 4px 4px 0;
-}
-
-.q-stem {
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-
-.q-options {
-  margin: 4px 0;
-  padding-left: 20px;
-  color: #606266;
-}
-
-.q-answer {
-  color: #67c23a;
-  font-size: 13px;
-}
-
-.q-analysis {
-  color: #909399;
-  font-size: 13px;
-  margin-top: 4px;
-}
 </style>
