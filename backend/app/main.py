@@ -38,7 +38,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="教育智能体平台 · 阶段一",
-    description="工单16~20：智能备课 / 智能助教 / 个性化学习推荐 / 面试AI复盘",
+    description="工单16~19：智能备课 / 智能助教 / 个性化学习推荐（工单20 面试AI复盘已移出本期）",
     version="0.1.0",
     lifespan=lifespan,
 )
