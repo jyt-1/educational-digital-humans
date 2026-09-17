@@ -1,4 +1,5 @@
 # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 备课相关模型
+# [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— exercises/exam_questions 增挂 kp_id
 """智能备课 6 张表：teaching_plans / plan_versions / coursewares / exercises / exam_questions / resources。
 
 LLM 生成内容以 JSON 存储，支持二次编辑；版本快照支持历史回溯与回滚。
@@ -11,6 +12,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -101,7 +103,15 @@ class Exercise(Base):
     analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
     knowledge_point: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     difficulty: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 工单19 增量：挂到知识图谱节点上。原来的 knowledge_point 自由文本列**保留不动**，
+    # 它仍是展示与导出的依据；本列只服务于画像与抽题。加列须走 migrate_w19.py——
+    # create_all 只建缺失的表，不会 ALTER 已存在的表
+    kp_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("knowledge_points.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (Index("idx_exercises_kpid", "kp_id"),)
 
 
 class ExamQuestion(Base):
@@ -121,7 +131,13 @@ class ExamQuestion(Base):
     knowledge_point: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     difficulty: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 工单19 增量：同 exercises.kp_id
+    kp_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("knowledge_points.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (Index("idx_exam_kpid", "kp_id"),)
 
 
 class Resource(Base):

@@ -2,6 +2,7 @@
 # [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— 开启外键约束（前置修复 P0）
 """SQLAlchemy engine、Session 与 Base。开发期使用 SQLite。"""
 
+import logging
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, event
@@ -9,6 +10,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # check_same_thread=False：FastAPI 多线程访问 SQLite 必需
 engine = create_engine(
@@ -64,7 +67,14 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    """建表。开发期直接 create_all；生产建议改用 Alembic 迁移。"""
-    from app import models  # noqa: F401  确保所有模型已注册到 Base.metadata
+    """建表 + 增量迁移。开发期直接 create_all；生产建议改用 Alembic 迁移。
 
-    Base.metadata.create_all(bind=engine)
+    注意不能只调 `create_all`：它只建**缺失的表**，不会给已存在的表加列。
+    工单19 给 `exercises` / `exam_questions` 加了 `kp_id`，那种改动必须走迁移——
+    否则会得到"模型里有、库里没有"的状态，直到查询时才报 `no such column`。
+    把迁移放在这里，是为了让"忘了跑迁移"不可能发生（见 app/migrations.py）。
+    """
+    from app.migrations import run as run_migrations
+
+    for change in run_migrations(engine):
+        logger.info("迁移：%s", change)

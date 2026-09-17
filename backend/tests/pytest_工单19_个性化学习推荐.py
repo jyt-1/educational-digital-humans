@@ -124,3 +124,68 @@ def _count_chunks(db, doc_id: int) -> int:
 
 def _count_messages(db, conversation_id: int) -> int:
     return db.query(Message).filter(Message.conversation_id == conversation_id).count()
+
+
+class TestMigration:
+    """工单19 增量迁移：`create_all` 只建缺失的表，**不会给已存在的表加列**。
+
+    测试库每次是全新的，`create_all` 直接把 `kp_id` 建进表里，**走不到 ALTER 分支**，
+    所以这里必须手工造一个"工单17/18 已交付、工单19 尚未迁移"的旧库来测。
+    """
+
+    def test_adds_kp_id_to_legacy_tables(self, tmp_path):
+        from sqlalchemy import create_engine
+
+        from app.migrations import run
+
+        legacy = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+        with legacy.begin() as conn:
+            # 模拟旧库：exercises / exam_questions 已存在，但都没有 kp_id
+            conn.exec_driver_sql("CREATE TABLE exercises (id INTEGER PRIMARY KEY, stem TEXT NOT NULL)")
+            conn.exec_driver_sql(
+                "CREATE TABLE exam_questions (id INTEGER PRIMARY KEY, stem TEXT NOT NULL)"
+            )
+
+        changes = run(legacy)
+        assert any("exercises" in c and "kp_id" in c for c in changes), changes
+        assert any("exam_questions" in c and "kp_id" in c for c in changes), changes
+
+        with legacy.connect() as conn:
+            for table in ("exercises", "exam_questions"):
+                cols = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+                assert "kp_id" in cols, f"{table} 迁移后仍缺 kp_id"
+
+    def test_is_idempotent(self, tmp_path):
+        """重跑迁移不能报错、不能重复加列——它是每次启动都会执行的路径。"""
+        from sqlalchemy import create_engine
+
+        from app.migrations import run
+
+        legacy = create_engine(f"sqlite:///{tmp_path / 'legacy2.db'}")
+        with legacy.begin() as conn:
+            conn.exec_driver_sql("CREATE TABLE exercises (id INTEGER PRIMARY KEY, stem TEXT NOT NULL)")
+
+        first = run(legacy)
+        second = run(legacy)
+
+        assert any("kp_id" in c for c in first)
+        # 第二次只剩 create_all 那一行说明——没有任何结构改动
+        assert len(second) == 1, second
+
+    def test_backfills_existing_rows_with_null(self, tmp_path):
+        """加列后老行必须可读：kp_id 为 NULL，由首次 `/kp/sync` 回填。"""
+        from sqlalchemy import create_engine
+
+        from app.migrations import run
+
+        legacy = create_engine(f"sqlite:///{tmp_path / 'legacy3.db'}")
+        with legacy.begin() as conn:
+            conn.exec_driver_sql("CREATE TABLE exercises (id INTEGER PRIMARY KEY, stem TEXT NOT NULL)")
+            conn.exec_driver_sql("INSERT INTO exercises (id, stem) VALUES (1, '梯度下降是哪类算法？')")
+
+        run(legacy)
+
+        with legacy.connect() as conn:
+            row = conn.exec_driver_sql("SELECT id, stem, kp_id FROM exercises WHERE id = 1").fetchone()
+        assert row[1] == "梯度下降是哪类算法？"
+        assert row[2] is None
