@@ -31,9 +31,6 @@ logger = logging.getLogger(__name__)
 # 已实现的 provider。阶段三加 "cloud" 时只需在此登记 + 补一个 _synthesize_cloud 分支
 _PROVIDERS = ("edge",)
 
-# 单次合成的最大等待时间（Edge-TTS 正常 1~3 秒，超过说明网络异常，宁可降级也别吊死）
-_TIMEOUT_SECONDS = 20.0
-
 # 缓存目录的软上限：超过就按 mtime 淘汰最旧的，防止无限增长
 _CACHE_KEEP = 400
 _CACHE_PRUNE_THRESHOLD = 500
@@ -68,6 +65,12 @@ _STRIKE_RE = re.compile(r"~~(.+?)~~")
 _ITALIC_RE = re.compile(r"(\*|_)(.+?)\1")
 _HTML_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _ESCAPE_RE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!~|>])")
+# 行间公式 $$...$$ 整块丢弃：LaTeX 念出来是纯噪音（行内 $x$ 不动——价格、变量都长这样，误伤代价更大）
+_MATH_BLOCK_RE = re.compile(r"\$\$.+?\$\$|\\\[.+?\\\]", re.DOTALL)
+# emoji 与变体选择符。**不含箭头区（U+2190~21FF）**——"A → B"在教学文本里是内容，删了会粘成"AB"
+_EMOJI_RE = re.compile(
+    "[\U0001f000-\U0001faff\U00002600-\U000027bf\U0000fe00-\U0000fe0f\U0000200d]+"
+)
 _WS_RE = re.compile(r"\s+")
 # 删掉「，」前的空格。角标/图片被替换成空串后，原位置与中文标点之间会留下空格，
 # 变成「震荡 ，甚至」——朗读时多一个突兀停顿，故单独清一遍。
@@ -112,8 +115,9 @@ def to_speakable(markdown_text: str) -> str:
     if not markdown_text:
         return ""
 
-    # 1. 代码围栏整块丢弃（含未闭合的尾部围栏）
+    # 1. 代码围栏与行间公式整块丢弃（含未闭合的尾部围栏）
     text = _FENCE_RE.sub(" ", markdown_text)
+    text = _MATH_BLOCK_RE.sub(" ", text)
 
     # 2. 逐行处理
     kept: list[str] = []
@@ -143,6 +147,7 @@ def to_speakable(markdown_text: str) -> str:
     text = _ITALIC_RE.sub(r"\2", text)
     text = _HTML_RE.sub("", text)
     text = _ESCAPE_RE.sub(r"\1", text)
+    text = _EMOJI_RE.sub("", text)
 
     # 4. 收尾
     text = _SPACE_BEFORE_CJK_PUNCT_RE.sub(r"\1", text)
@@ -247,23 +252,28 @@ async def _synthesize_edge(text: str, voice: str) -> bytes:
             "未安装 edge-tts。请执行：pip install -i https://pypi.tuna.tsinghua.edu.cn/simple edge-tts"
         ) from exc
 
+    timeout = int(settings.TTS_TIMEOUT_SECONDS)
     communicate = edge_tts.Communicate(
         text,
         voice,
         rate=settings.TTS_RATE,
         volume=settings.TTS_VOLUME,
+        # 超时下推到库：它自己管 connect/receive 两级，比外层包一层粗暴的 asyncio.timeout 精确。
+        # proxy 必须传 None 而非空串——库内会校验 isinstance(proxy, str)，空串能过校验却是个坏代理。
+        connect_timeout=10,
+        receive_timeout=timeout,
+        proxy=settings.TTS_PROXY or None,
     )
     buffer = bytearray()
     try:
-        async with asyncio.timeout(_TIMEOUT_SECONDS):
+        # 外层再兜一道：库的 receive_timeout 只覆盖单次读，卡在握手后会漏网
+        async with asyncio.timeout(timeout + 10):
             async for chunk in communicate.stream():
                 # 除 audio 外还有 SentenceBoundary 等事件，只取音频
                 if chunk["type"] == "audio":
                     buffer.extend(chunk["data"])
     except TimeoutError as exc:
-        raise TTSUnavailableError(
-            f"语音合成超时（超过 {_TIMEOUT_SECONDS:.0f} 秒）。请检查网络后重试。"
-        ) from exc
+        raise TTSUnavailableError(f"语音合成超时（超过 {timeout} 秒）。请检查网络后重试。") from exc
     except Exception as exc:  # noqa: BLE001 - 网络/协议异常统一转成可读提示
         raise TTSUnavailableError(
             "语音合成服务暂时不可用，请检查网络连接（Edge-TTS 需要联网）。"

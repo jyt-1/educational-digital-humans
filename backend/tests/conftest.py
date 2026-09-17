@@ -1,5 +1,6 @@
 # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— pytest 公共夹具
 # [工单18] 人工智能NLP-Agent数字人项目-教育智能体-智能助教任务 —— 追加 Chroma 向量库目录隔离
+# [阶段二] 人工智能NLP-Agent数字人项目-教育智能体-数字人形象层 —— 追加 TTS 缓存目录隔离
 """测试夹具：独立临时数据库 + TestClient + 师生账号。
 
 必须在导入 app 之前设置环境变量，因为 settings 是模块级单例、engine 在导入时创建。
@@ -23,6 +24,8 @@ os.environ["DATA_DIR"] = _TMP_DIR
 os.environ["UPLOAD_DIR"] = os.path.join(_TMP_DIR, "uploads")
 # 工单18：Chroma 向量库同样落到临时目录，避免污染真实的 data/chroma
 os.environ["CHROMA_DIR"] = os.path.join(_TMP_DIR, "chroma")
+# 阶段二：TTS 合成缓存同样落到临时目录，避免往真实 data/tts_cache 里写测试音频
+os.environ["TTS_CACHE_DIR"] = os.path.join(_TMP_DIR, "tts_cache")
 # 密钥长度需 >= 32 字节，否则 PyJWT 会发出 InsecureKeyLengthWarning
 os.environ["JWT_SECRET"] = "test-secret-key-for-pytest-only-0123456789"
 os.environ["LLM_API_KEY"] = ""  # 默认未配置，需要时由测试自行 mock

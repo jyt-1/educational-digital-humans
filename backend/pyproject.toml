@@ -9,7 +9,7 @@
 [project]
 name = "edu-agent-backend"
 version = "0.1.0"
-description = "教育智能体平台 · 阶段一（工单16~20）后端"
+description = "教育智能体平台 · 阶段一（工单16~19）+ 阶段二（数字人形象层）后端"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
@@ -19,4 +19,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 pythonpath = ["."]
 addopts = "-ra --strict-markers"
+# 阶段二起出现 async 用例（TTS 服务是 async 的）。auto 模式省去每个用例挂
+# @pytest.mark.asyncio，且对既有的 240 条同步用例零影响。
+asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]

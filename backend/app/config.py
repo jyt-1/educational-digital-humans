@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     TTS_RATE: str = "+0%"               # 语速，形如 "+20%" / "-10%"
     TTS_VOLUME: str = "+0%"
     TTS_MAX_CHARS: int = 300            # 单次合成文本上限，超出截断（防止误传整篇答案）
+    TTS_TIMEOUT_SECONDS: int = 30       # 单句合成超时（同时用作 edge-tts 的 receive_timeout）
+    # 留空 = 跟随系统 HTTP(S)_PROXY（edge-tts 底层 aiohttp 的 trust_env=True）。
+    # 本机代理在 127.0.0.1:7897，关掉代理会连带让朗读失效——这里留个改道口子。
+    TTS_PROXY: str = ""
     TTS_CACHE_ENABLED: bool = True
     # 合成结果落盘缓存：重复语句不只是提速，还能在断网时照常播放——演示可靠性靠它
     TTS_CACHE_DIR: str = "./data/tts_cache"
