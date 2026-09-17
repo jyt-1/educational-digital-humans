@@ -57,7 +57,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, reactive, ref } from 'vue'
+import { onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 
 import { fetchChunkImage, getChunk } from '@/api/kb'
@@ -137,10 +137,16 @@ function loadImage(chunkId, chunkType) {
     })
 }
 
-// 图片块在检索结果里直接内联缩略图，便于验收时确认「多模态内容能回显」
-props.citations.forEach((item) => loadImage(item.chunk_id, item.chunk_type))
-
-loadAllImages()
+// 图片块在检索结果里直接内联缩略图，便于验收时确认「多模态内容能回显」。
+// 用 watch 而非 setup 期一次性 forEach：引用是流式问答返回后才赋上来的，
+// 只在 setup 时跑一遍会让图片永远停在空白占位。
+watch(
+  () => props.citations,
+  (list) => {
+    ;(list || []).forEach((item) => loadImage(item.chunk_id, item.chunk_type))
+  },
+  { immediate: true, deep: true },
+)
 
 onBeforeUnmount(() => {
   Object.values(imageUrls).forEach((url) => URL.revokeObjectURL(url))
