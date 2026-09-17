@@ -32,13 +32,28 @@ const routes = [
     meta: { title: '编辑与导出', group: '智能备课', hidden: true },
   },
 
-  // ---- 工单18/19/20 占位（后续工单实现） ----
+  // ---- 工单18 智能助教 ----
+  { path: '/assistant', redirect: '/assistant/chat' },
   {
-    path: '/assistant',
-    name: 'assistant',
-    component: () => import('@/views/Placeholder.vue'),
-    meta: { title: '智能助教', group: '智能助教', ticket: '工单18' },
+    path: '/assistant/chat',
+    name: 'assistant-chat',
+    component: () => import('@/views/assistant/Chat.vue'),
+    meta: { title: '智能问答', group: '智能助教' },
   },
+  {
+    path: '/assistant/kb',
+    name: 'assistant-kb',
+    component: () => import('@/views/assistant/Knowledge.vue'),
+    meta: { title: '知识库', group: '智能助教' },
+  },
+  {
+    path: '/assistant/search',
+    name: 'assistant-search',
+    component: () => import('@/views/assistant/Search.vue'),
+    meta: { title: '检索调试', group: '智能助教' },
+  },
+
+  // ---- 工单19/20 占位（后续工单实现） ----
   {
     path: '/learn',
     name: 'learn',

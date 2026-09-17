@@ -21,8 +21,14 @@
         <el-menu-item index="/lesson/plans">
           <span>我的备课</span>
         </el-menu-item>
-        <el-menu-item index="/assistant">
-          <span>智能助教</span>
+        <el-menu-item index="/assistant/chat">
+          <span>智能问答</span>
+        </el-menu-item>
+        <el-menu-item index="/assistant/kb">
+          <span>知识库</span>
+        </el-menu-item>
+        <el-menu-item index="/assistant/search">
+          <span>检索调试</span>
         </el-menu-item>
         <el-menu-item index="/learn">
           <span>个性化学习</span>
