@@ -1,4 +1,4 @@
-// [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 路由
+// [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 路由（工单18/19 增补各模块页面）
 import { createRouter, createWebHashHistory } from 'vue-router'
 
 import { isLoggedIn } from '@/store/user'
@@ -53,18 +53,31 @@ const routes = [
     meta: { title: '检索调试', group: '智能助教' },
   },
 
-  // ---- 工单19/20 占位（后续工单实现） ----
+  // ---- 工单19 个性化学习推荐 ----
+  { path: '/learn', redirect: '/learn/dashboard' },
   {
-    path: '/learn',
-    name: 'learn',
-    component: () => import('@/views/Placeholder.vue'),
-    meta: { title: '个性化学习', group: '个性化学习', ticket: '工单19' },
+    path: '/learn/dashboard',
+    name: 'learn-dashboard',
+    component: () => import('@/views/learn/Dashboard.vue'),
+    meta: { title: '学习仪表盘', group: '个性化学习' },
   },
   {
-    path: '/interview',
-    name: 'interview',
-    component: () => import('@/views/Placeholder.vue'),
-    meta: { title: '面试AI复盘', group: '面试AI复盘', ticket: '工单20' },
+    path: '/learn/path',
+    name: 'learn-path',
+    component: () => import('@/views/learn/Path.vue'),
+    meta: { title: '学习路径', group: '个性化学习' },
+  },
+  {
+    path: '/learn/practice',
+    name: 'learn-practice',
+    component: () => import('@/views/learn/Practice.vue'),
+    meta: { title: '练习与试卷', group: '个性化学习' },
+  },
+  {
+    path: '/learn/mistakes',
+    name: 'learn-mistakes',
+    component: () => import('@/views/learn/Mistakes.vue'),
+    meta: { title: '错题本', group: '个性化学习' },
   },
 
   { path: '/:pathMatch(.*)*', redirect: '/lesson' },

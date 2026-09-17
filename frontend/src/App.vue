@@ -1,4 +1,4 @@
-<!-- [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 根组件（侧边栏导航四模块） -->
+<!-- [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 根组件（侧边栏导航四模块，工单18/19 增补子菜单） -->
 <template>
   <router-view v-if="isLoginPage" />
 
@@ -6,36 +6,36 @@
     <aside class="app-aside">
       <div class="app-logo">
         教育智能体平台
-        <small>阶段一 · 工单16~20</small>
+        <small>阶段一 · 工单16~19</small>
       </div>
       <el-menu
         :default-active="activeMenu"
+        :default-openeds="['lesson', 'assistant', 'learn']"
         background-color="#001529"
         text-color="rgba(255,255,255,0.72)"
         active-text-color="#ffffff"
         router
       >
-        <el-menu-item index="/lesson">
-          <span>智能备课</span>
-        </el-menu-item>
-        <el-menu-item index="/lesson/plans">
-          <span>我的备课</span>
-        </el-menu-item>
-        <el-menu-item index="/assistant/chat">
-          <span>智能问答</span>
-        </el-menu-item>
-        <el-menu-item index="/assistant/kb">
-          <span>知识库</span>
-        </el-menu-item>
-        <el-menu-item index="/assistant/search">
-          <span>检索调试</span>
-        </el-menu-item>
-        <el-menu-item index="/learn">
-          <span>个性化学习</span>
-        </el-menu-item>
-        <el-menu-item index="/interview">
-          <span>面试AI复盘</span>
-        </el-menu-item>
+        <el-sub-menu index="lesson">
+          <template #title><span>智能备课</span></template>
+          <el-menu-item index="/lesson">内容生成</el-menu-item>
+          <el-menu-item index="/lesson/plans">我的备课</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="assistant">
+          <template #title><span>智能助教</span></template>
+          <el-menu-item index="/assistant/chat">智能问答</el-menu-item>
+          <el-menu-item index="/assistant/kb">知识库</el-menu-item>
+          <el-menu-item index="/assistant/search">检索调试</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="learn">
+          <template #title><span>个性化学习</span></template>
+          <el-menu-item index="/learn/dashboard">学习仪表盘</el-menu-item>
+          <el-menu-item index="/learn/path">学习路径</el-menu-item>
+          <el-menu-item index="/learn/practice">练习与试卷</el-menu-item>
+          <el-menu-item index="/learn/mistakes">错题本</el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </aside>
 
