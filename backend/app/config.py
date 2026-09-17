@@ -1,4 +1,5 @@
 # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 全局配置（pydantic-settings 读 .env）
+# [阶段二] 人工智能NLP-Agent数字人项目-教育智能体-数字人形象层 —— 追加 TTS / 形象 provider 配置组
 """全局配置。所有模型名、base_url、开关一律从 .env 读取，代码中不得硬编码。"""
 
 from pathlib import Path
@@ -51,6 +52,20 @@ class Settings(BaseSettings):
     # 故留一个可一键关闭的开关（设计文档 2.2 场景三第 7 条）
     ASSISTANT_HOTQ_ENABLED: bool = True
 
+    # ---------- 数字人 / TTS（阶段二） ----------
+    # 阶段二只做输出侧（文字→语音+口型）；输入侧的 ASR 随工单20 一并移出，见下方 ASR 分组。
+    TTS_ENABLED: bool = True            # 总开关。关闭后前端不朗读，形象仍在（只眨眼睛不说话）
+    TTS_PROVIDER: str = "edge"          # edge=本地 Edge-TTS；阶段三换 cloud=云端数字人 API
+    TTS_VOICE: str = "zh-CN-XiaoxiaoNeural"
+    TTS_RATE: str = "+0%"               # 语速，形如 "+20%" / "-10%"
+    TTS_VOLUME: str = "+0%"
+    TTS_MAX_CHARS: int = 300            # 单次合成文本上限，超出截断（防止误传整篇答案）
+    TTS_CACHE_ENABLED: bool = True
+    # 合成结果落盘缓存：重复语句不只是提速，还能在断网时照常播放——演示可靠性靠它
+    TTS_CACHE_DIR: str = "./data/tts_cache"
+    # 形象驱动 provider。阶段三接云端数字人 SDK 时改这一项即可，前端业务代码不动
+    AVATAR_PROVIDER: str = "svg-face"
+
     # ---------- ASR ----------
     WHISPER_MODEL: str = "small"
 
@@ -82,6 +97,11 @@ class Settings(BaseSettings):
         """知识库文档中抽取出的图片与表格截图存放目录（工单18 引用回显用）。"""
         return self.upload_dir / "kb"
 
+    @property
+    def tts_cache_dir(self) -> Path:
+        """TTS 合成结果缓存目录（阶段二）。落在 data/ 下，已在 .gitignore 中。"""
+        return self._resolve(self.TTS_CACHE_DIR)
+
     @staticmethod
     def _resolve(raw: str) -> Path:
         p = Path(raw)
@@ -102,3 +122,4 @@ settings.data_dir.mkdir(parents=True, exist_ok=True)
 settings.upload_dir.mkdir(parents=True, exist_ok=True)
 settings.chroma_dir.mkdir(parents=True, exist_ok=True)
 settings.kb_image_dir.mkdir(parents=True, exist_ok=True)
+settings.tts_cache_dir.mkdir(parents=True, exist_ok=True)

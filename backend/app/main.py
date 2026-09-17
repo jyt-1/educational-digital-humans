@@ -1,4 +1,5 @@
 # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— FastAPI 应用入口
+# [阶段二] 人工智能NLP-Agent数字人项目-教育智能体-数字人形象层 —— 注册语音合成路由
 """FastAPI 入口：挂载 CORS（前端 5173）、注册路由、建表、统一异常响应。
 
 启动：cd backend && uvicorn app.main:app --reload
@@ -18,6 +19,7 @@ from app.api import auth as auth_api
 from app.api import kb as kb_api
 from app.api import learn as learn_api
 from app.api import lesson as lesson_api
+from app.api import tts as tts_api
 from app.config import settings
 from app.db import init_db
 
@@ -86,6 +88,7 @@ app.include_router(lesson_api.router)
 app.include_router(kb_api.router)
 app.include_router(assistant_api.router)
 app.include_router(learn_api.router)
+app.include_router(tts_api.router)
 
 
 @app.get("/api/health", tags=["系统"], summary="健康检查")
