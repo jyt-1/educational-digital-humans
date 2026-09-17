@@ -10,8 +10,10 @@ CLAUDE.md 第 10 节 DoD 第 5 条要 `docs/evidence/工单XX/` 有截图，而�
 
 用法（在 backend/ 目录下）
 -------------------------
-    python scripts/capture_evidence.py                 # 全部
-    python scripts/capture_evidence.py --only lesson    # 只跑工单17（lesson/assistant/learn）
+    python scripts/capture_evidence.py                  # 全部
+    python scripts/capture_evidence.py --only lesson    # 只跑工单17（lesson/assistant/learn/avatar）
+    python scripts/capture_evidence.py --only avatar    # 只跑阶段二数字人
+    python scripts/capture_evidence.py --stage avatar-speech   # 只跑某一个 stage
     python scripts/capture_evidence.py --headed         # 想看着它点（默认无头，不打扰你用电脑）
 
 前置：后端 8000 + 前端 5173 都在跑（见 docs/进度记录.md §六 的两条启动命令）。
@@ -36,7 +38,7 @@ import time
 import traceback
 from pathlib import Path
 
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 # ------------------------------------------------------------------ 路径与常量
 
@@ -130,7 +132,9 @@ class Evidence:
     def shot(self, name: str, full: bool = True, settle: int = 500) -> Path:
         n = self.counters.get(self.ticket, 0) + 1
         self.counters[self.ticket] = n
-        path = EVID / f"工单{self.ticket}" / f"{n:02d}-{name}.png"
+        # 阶段二没有工单号，目录直接叫「阶段二」，不要写成「工单阶段二」
+        label = f"工单{self.ticket}" if self.ticket.isdigit() else self.ticket
+        path = EVID / label / f"{n:02d}-{name}.png"
         path.parent.mkdir(parents=True, exist_ok=True)
         self.page.wait_for_timeout(settle)  # 让过渡动画/图表渲染落定
         self.page.screenshot(path=str(path), full_page=full)
@@ -889,6 +893,179 @@ def stage_teacher_governance(ev: Evidence) -> None:
     ev.check("归并后未归类条数减少", True, "见截图")
 
 
+# ------------------------------------------------------------------ 阶段二
+
+# 口型开合度探针：嘴部 path 是 `M x 148 Q 100 y1 ... Q 100 y2 ...`，
+# 其中 y2 = 148 + 开口高度，故「所有数字里的最大值 - 148」就是开口高度（像素）。
+# 闭嘴时约 2，全张时约 17。
+_MOUTH_OPEN_JS = """() => {
+  const d = document.querySelector('[data-avatar-mouth]')?.getAttribute('d') || '';
+  const nums = d.match(/-?\\d+(?:\\.\\d+)?/g);
+  return nums ? Math.max(...nums.map(Number)) - 148 : -1;
+}"""
+
+_PROBE_JS = """() => ({...window.__speechProbe,
+  status: document.querySelector('.avatar-status')?.innerText || ''})"""
+
+
+def _mouth_open(ev: Evidence) -> float:
+    return ev.page.evaluate(_MOUTH_OPEN_JS)
+
+
+def ask(ev: Evidence, question: str) -> None:
+    """在问答页输入问题并发送。"""
+    page = ev.page
+    page.get_by_placeholder("输入问题，Enter 发送，Shift + Enter 换行").fill(question)
+    page.get_by_role("button", name="发送").click()
+
+
+def stage_avatar_speech(ev: Evidence) -> None:
+    """阶段二验收：数字人形象 + 边生成边念 + **口型确由音量驱动**。
+
+    最后一条是关键：光截图看不出嘴是「随声音动」还是「按固定节奏动」。
+    故这里断言发声期间口型形状的**种类数**与开机后的开合度变化——
+    假动画也能截图，但给不出与音量同步的连续形变。
+    """
+    page = ev.page
+    goto(ev, "/assistant/chat", ".avatar-svg")
+    ev.shot("数字人-待命态")
+
+    ev.check("形象 SVG 已渲染", page.locator(".avatar-svg").count() == 1)
+    ev.check("初始状态为待命", "待命" in page.locator(".avatar-status").inner_text())
+    ev.check("待命时嘴是闭的", _mouth_open(ev) < 6, f"开口 {_mouth_open(ev):.1f}px")
+
+    # 音色下拉：工单要求可切换音色
+    page.locator(".avatar-voice").click()
+    page.wait_for_timeout(400)
+    ev.shot("数字人-音色下拉")
+    options = page.locator(".el-select-dropdown:visible .el-select-dropdown__item")
+    ev.check("音色下拉有多个中文音色", options.count() >= 8, f"{options.count()} 个")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+
+    # —— 第一问：让回答自然念完，采集口型与音量 ——
+    # 用会产出**表格**的问题：表格行必须被丢弃而不是整行念出来
+    ask(ev, "表格里 Adam 优化器适合什么场景？")
+
+    speaking, opened = [], []
+    shot_done = False
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        snap = page.evaluate(_PROBE_JS)
+        snap["open"] = _mouth_open(ev)
+        snap["d"] = page.evaluate(
+            "() => document.querySelector('[data-avatar-mouth]')?.getAttribute('d')"
+        )
+        if snap["status"] == "正在讲解":
+            speaking.append(snap)
+            if snap["open"] >= 8:
+                opened.append(snap)
+            # 趁**还在念**的时候当场按快门，且要求采到的这一帧就张着嘴。
+            # 不能等采样循环结束再截：循环一退出往往正是最后一句念完的那一刻，
+            # 那时截到的是「文案已转待命、口型还停在上一帧」的自相矛盾画面
+            # （口型走 rAF 直写、文案走 Vue 微任务，收尾时天然差一帧）。
+            if not shot_done and snap["open"] >= 12:
+                ev.shot("数字人-讲解中（口型随音量开合）", settle=0)
+                shot_done = True
+        # 播满 2 句就够证明「队列在串行推进」了。这里**不能**卡到 3 句：
+        # 一篇文章能念几句取决于大模型这次写了什么——表格占比高的回答
+        # 会被前端整行丢弃，可能只剩两句可念，卡 3 句会偶发空等 60 秒。
+        if snap["played"] >= 2:
+            break
+        page.wait_for_timeout(150)
+
+    loop_elapsed = time.time() - t0
+    if not shot_done:
+        ev.note("没采到张嘴的瞬间（口型变化快于 150ms 采样间隔），下面这张是静息态")
+        ev.shot("数字人-讲解中（口型随音量开合）")
+
+    probe = page.evaluate(_PROBE_JS)
+    # 判据是「念了不止一句」，而不是某个绝对句数——见上面 break 处的说明。
+    # 第 2 句只有在第 1 句 onended 之后才会开播，故 ≥2 已足以证明是串行推流。
+    ev.check(
+        "生成了语音（播放句数 ≥ 2）",
+        probe["played"] >= 2,
+        f"played={probe['played']}，采样 {loop_elapsed:.0f}s/{len(speaking)} 帧发言",
+    )
+    ev.check(
+        "音量峰值 > 0.05（确有音频信号）",
+        probe["volumePeak"] > 0.05,
+        f"峰值 {probe['volumePeak']:.3f}",
+    )
+    shapes = {s["d"] for s in speaking if s["d"]}
+    ev.check(
+        "发声期间口型持续变形（> 5 种形状）",
+        len(shapes) > 5,
+        f"{len(speaking)} 帧 / {len(shapes)} 种形状",
+    )
+    ev.check("张嘴采样帧存在（开合度 ≥ 8px）", len(opened) >= 1, f"{len(opened)} 帧张嘴")
+
+    # 表格行应当被前端丢弃，而不是整行送去合成（后端会正当地回 400）
+    tts_bad = [r for r in ev.failed_reqs if "/tts/speak" in r]
+    ev.check(
+        "没有把表格行送去合成（/tts/speak 无 4xx）",
+        not tts_bad,
+        "; ".join(tts_bad[:2]) if tts_bad else "无",
+    )
+
+    # —— 第二问：趁流还在进行中点「停止生成」 ——
+    # 必须单独再问一次：第一问结束时流已经收尾，按钮早已变回「发送」。
+    # 允许重试一次：语音何时开口、流何时收尾都取决于大模型的输出节奏，
+    # 极端情况（首句特别长）下开口时流已经收尾，那一次就没得可点。
+    stop_btn = page.get_by_role("button", name="停止生成")
+    clicked, ok = False, False
+    for attempt in range(2):
+        ask(
+            ev,
+            "再详细讲讲梯度下降的学习率该怎么选"
+            if attempt == 0
+            else "那动量法又是怎么加速收敛的？",
+        )
+        try:
+            # 先确认「流确实在跑」——按钮在就说明在跑，这是本次要验的前提
+            stop_btn.wait_for(state="visible", timeout=30000)
+        except PlaywrightTimeoutError:
+            ev.note("等不到「停止生成」按钮，本轮无法验证停止")
+            break
+
+        # 再等语音开念。**「正在讲解」不等于「流还在跑」**：边生成边念会让尾句在
+        # 流收尾之后继续播，只盯状态就会在流已结束时去点一个不存在的按钮、
+        # 白等 20 秒才报超时（真踩过，见 docs/进度记录.md）。故循环条件里一并盯着按钮。
+        waited = time.time()
+        while time.time() - waited < 30 and stop_btn.count():
+            if page.evaluate(_PROBE_JS)["status"] == "正在讲解":
+                ok = True
+                break
+            page.wait_for_timeout(200)
+        ev.check("第二问重新开始朗读", ok)
+        if not ok:
+            continue
+
+        try:
+            stop_btn.click(timeout=5000)
+            clicked = True
+            break
+        except PlaywrightTimeoutError:
+            continue  # 就在这一瞬收尾了，再问一次
+
+    ev.check("流仍在进行时点到了「停止生成」", clicked)
+    page.wait_for_timeout(2500)
+    a1 = page.evaluate(_PROBE_JS)["played"]
+    ev.shot("数字人-停止生成后（静音）")
+    page.wait_for_timeout(3000)
+    a2 = page.evaluate(_PROBE_JS)["played"]
+    # 比对「停止后再等 3 秒」而不是「点按钮前后」：点击瞬间可能正有一句自然播完，
+    # 拿那一刻前后比会偶发误判。真正的断言是**点了之后播放确实停了**。
+    ev.check("停止生成后播放不再前进", a1 == a2, f"{a1} → {a2}（间隔 3 秒）")
+    ev.check("停止后状态回到待命", "待命" in page.locator(".avatar-status").inner_text())
+
+    # —— 静音开关 ——
+    page.get_by_role("button", name=re.compile("朗读中")).click()
+    page.wait_for_timeout(600)
+    ev.check("静音开关生效", "已静音" in page.locator(".avatar-toggle").inner_text())
+    ev.shot("数字人-静音态")
+
+
 # ------------------------------------------------------------------ 主流程
 
 _case_plan_id = ""
@@ -910,6 +1087,7 @@ STAGES = [
     ("learn-mistakes", "learn", stage_learn_mistakes, "19", "student"),
     ("learn-related-chat", "learn", stage_learn_related_chat, "19", "student"),
     ("teacher-governance", "learn", stage_teacher_governance, "19", "teacher"),
+    ("avatar-speech", "avatar", stage_avatar_speech, "阶段二", "teacher"),
 ]
 
 ACCOUNTS = {"teacher": TEACHER, "student": STUDENT}
@@ -917,7 +1095,7 @@ ACCOUNTS = {"teacher": TEACHER, "student": STUDENT}
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", default="", help="只跑哪一组：lesson / assistant / learn（逗号分隔）")
+    ap.add_argument("--only", default="", help="只跑哪一组：lesson / assistant / learn / avatar（逗号分隔）")
     ap.add_argument("--stage", default="", help="只跑某个 stage 名")
     ap.add_argument("--headed", action="store_true", help="显示浏览器窗口（默认无头）")
     args = ap.parse_args()
@@ -966,7 +1144,7 @@ def main() -> int:
         ctx.close()
         browser.close()
 
-    print(f"\n耗时 {time.time() - t0:.0f} 秒。截图目录：docs/evidence/工单{{17,18,19}}/")
+    print(f"\n耗时 {time.time() - t0:.0f} 秒。截图目录：docs/evidence/工单{{17,18,19}}/ 与 docs/evidence/阶段二/")
     return 0 if ok_all else 1
 
 
