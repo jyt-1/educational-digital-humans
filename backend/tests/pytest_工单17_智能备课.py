@@ -711,3 +711,80 @@ class TestPromptSchema:
             objectives=[],
         )
         assert expect_total in messages[1]["content"]
+
+    # ---- 设计文档 3.2.6（v1.3）：知识点与难度的取值约束 ----
+    #
+    # 回归背景：工单19 的知识点匹配采用「后缀归一化」吃掉标签漂移，其前提是
+    # LLM 从上下文【涉及知识点】里原样选词，而非自己改写（"BP算法" vs "反向传播"）。
+    # 模板一旦松口，未归类节点就会被撑爆，匹配方案随之失效。
+
+    @pytest.mark.parametrize("content_type", ["习题", "试题"])
+    def test_question_prompt_pins_knowledge_point_source(self, content_type):
+        from app.services.prompts import _USER_TEMPLATES
+
+        template = _USER_TEMPLATES[content_type]
+        assert "【涉及知识点】" in template, f"{content_type}模板须指明 knowledge_point 的来源"
+        assert "原样选取" in template, f"{content_type}模板须禁止改写知识点名称"
+
+    @pytest.mark.parametrize("content_type", ["习题", "试题"])
+    def test_question_prompt_pins_difficulty_enum(self, content_type):
+        """difficulty 只能取三档，与工单19 的 CHECK 约束同口径。"""
+        from app.services.prompts import _USER_TEMPLATES
+
+        template = _USER_TEMPLATES[content_type]
+        assert "「简单」「中等」「困难」" in template, f"{content_type}模板须给出 difficulty 三档枚举"
+
+    def test_exam_prompt_requires_knowledge_point_in_requirements(self):
+        """回归：试题模板的「要求」区块原先漏了 knowledge_point。
+
+        示例 JSON 里虽写了该字段，但要求列表没提，LLM 实测会大面积为空——
+        而试题正是工单19 题库的主要来源。
+        """
+        from app.services.prompts import _TEMPLATE_EXAM
+
+        requirements = _TEMPLATE_EXAM.split("要求：", 1)[1]
+        assert "knowledge_point" in requirements
+
+    @pytest.mark.parametrize("content_type", ["习题", "试题"])
+    def test_template_example_item_matches_downstream_schema(self, content_type):
+        """把模板里的示例 JSON 当 fixture 解析，断言它满足工单19 汇入所需的全部字段。
+
+        这样"模板承诺的输出结构"与"下游消费方要的结构"被钉在同一个断言里：
+        谁改坏了示例块（例如删掉 knowledge_point），这条用例立刻红。
+        """
+        from app.services.prompts import _USER_TEMPLATES
+
+        items = _example_items(_USER_TEMPLATES[content_type])
+        assert len(items) == 1, f"{content_type}模板示例应为单道题的结构样例"
+
+        item = items[0]
+        for field in ("qtype", "stem", "options", "answer", "analysis", "knowledge_point", "score", "difficulty"):
+            assert field in item, f"{content_type}模板示例缺少字段 {field}"
+
+        assert item["knowledge_point"], f"{content_type}模板示例的 knowledge_point 不得为空"
+        assert item["difficulty"] in {"简单", "中等", "困难"}
+        assert isinstance(item["score"], int) and item["score"] > 0
+
+        # 解析路径必须原样接受该结构
+        assert normalize_items([item]) == [item]
+
+
+def _example_items(template: str) -> list[dict]:
+    """抽出模板「每道题的结构如下：」之后的示例 JSON 数组。
+
+    模板是 .format() 字符串，花括号被转义成 {{ }}，故先反转义再按括号深度配对，
+    避免误取到「要求」区块里 `["A. 正确", "B. 错误"]` 之类的内层数组。
+    """
+    raw = template.replace("{{", "{").replace("}}", "}")
+    start = raw.index("[", raw.index("每道题的结构如下："))
+
+    depth = 0
+    for idx in range(start, len(raw)):
+        if raw[idx] == "[":
+            depth += 1
+        elif raw[idx] == "]":
+            depth -= 1
+            if depth == 0:
+                return json.loads(raw[start : idx + 1])
+
+    raise AssertionError("模板中未找到闭合的示例 JSON 数组")
