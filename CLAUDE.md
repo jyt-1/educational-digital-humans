@@ -14,10 +14,11 @@
 
 ### 阶段划分（**严格串行，前一阶段全部验收后才启动下一阶段**）
 
-- **阶段一 = 当前唯一任务**：纯文本 Web 系统（"AI 教学大脑"），即工单 16→17→18→19（**工单 20 已移出本期**）。
-  **四个工单全部完成并通过验收之前，禁止开始任何数字人形象层工作，禁止提前引入 TTS / Avatar / 口型相关依赖与代码。**
-- 阶段二 = 数字人形象层：前端 2D 虚拟形象 + TTS + 音量驱动口型；数字人层抽象为可替换 provider（形象驱动 / TTS 各一个接口 + 一个本地实现）
-- 阶段三 = 接入云端数字人 API（臻灵 / 讯飞虚拟人），理论上只改 provider 配置
+- ~~**阶段一 = 当前唯一任务**：纯文本 Web 系统（"AI 教学大脑"），即工单 16→17→18→19（**工单 20 已移出本期**）。~~
+  **✅ 已于 2026-09-17 完成并验收**（240 条 pytest 全绿、80/80 浏览器断言通过、验收截图落盘、DoD 五条齐活）。
+- ~~阶段二 = 数字人形象层：前端 2D 虚拟形象 + TTS + 音量驱动口型；数字人层抽象为可替换 provider（形象驱动 / TTS 各一个接口 + 一个本地实现）~~
+  **✅ 已于 2026-09-17 完成**（Edge-TTS + 纯代码 SVG 形象 + 音量驱动口型，43 条 pytest 全绿、14/14 浏览器断言通过；只挂智能助教问答页）。详见第 8 节末「阶段二」小节。
+- 阶段三 = 接入云端数字人 API（臻灵 / 讯飞虚拟人），理论上只改 provider 配置（新增一个 provider 实现 + 改 `.env` 的 `AVATAR_PROVIDER` / `TTS_PROVIDER`，问答页与舞台代码不动）
 - 阶段四 = 实时全双工教学对话（不在范围）
 
 > 阶段划分依据：`教育数字人竞品调研.md` 结论——形象层"已是成熟商品，不构成任何壁垒"，自研价值在教育层；市场唯一空缺是"实时视频对话 + **背后有真正的教学策略和学情闭环**"，其"背后"部分正是阶段一范围。
@@ -52,9 +53,11 @@
 | 向量库 | ChromaDB（persist_directory 指向 ./data/chroma） |
 | ASR | faster-whisper，模型固定 `small` + int8 量化，纯 CPU（**随工单 20 移出本期，本期不安装**；将来启用时按此行选型） |
 | 导出 | python-docx（教案/习题/试题）、python-pptx（课件） |
-| 测试 | pytest + httpx（FastAPI TestClient） |
+| TTS（阶段二） | **edge-tts**（微软 Edge 免费语音服务，纯 Python、无 Key、**需联网**）；结果落盘缓存，重复语句离线可播 |
+| 数字人形象（阶段二） | **前端纯代码内联 SVG** + Web Audio API（`AnalyserNode` 读音量驱动口型），**零 GPU、零素材** |
+| 测试 | pytest + httpx（FastAPI TestClient）；阶段二起 `asyncio_mode="auto"` |
 
-> 阶段二才会引入：TTS（云端 API / Edge-TTS）、前端 2D 形象驱动、provider 抽象层。**阶段一不得引入。**
+> 阶段三才会引入：云端数字人 API（臻灵 / 讯飞虚拟人）。**通过 provider 接口替换，不改业务代码。**
 
 ## 4. 目录结构（按此创建，新文件放对位置）
 
@@ -74,17 +77,20 @@ Education-agent/
 │   │   ├── auth.py            ← JWT 签发/校验 + 角色依赖注入（阶段一共用）
 │   │   ├── models/            ← SQLAlchemy 模型（按工单分文件，user.py 共用）
 │   │   ├── schemas/           ← Pydantic 模型
-│   │   ├── api/               ← 路由：auth/ lesson/ assistant/ learn/ interview/
-│   │   └── services/          ← 业务逻辑；llm_client.py / rag.py / asr.py 统一封装
-│   ├── tests/                 ← pytest，文件名 pytest_工单XX_功能.py
+│   │   ├── api/               ← 路由：auth/ lesson/ assistant/ learn/ interview/ tts/〔阶段二〕
+│   │   └── services/          ← 业务逻辑；llm_client.py / rag.py / tts.py〔阶段二〕统一封装
+│   ├── tests/                 ← pytest，文件名 pytest_工单XX_功能.py（阶段二用 pytest_阶段二_数字人.py）
+│   ├── scripts/               ← capture_evidence.py（浏览器取证）等
 │   └── requirements.txt
 ├── frontend/
 │   └── src/
-│       ├── api/               ← axios 实例与各模块 api
+│       ├── api/               ← axios 实例与各模块 api（含 tts.js〔阶段二〕）
+│       ├── audio/             ← 〔阶段二〕sentenceSplitter.js（切句）/ speechQueue.js（合成队列 + 音量分析）
+│       ├── avatar/            ← 〔阶段二〕provider.js（形象驱动 provider）
 │       ├── views/lesson/ assistant/ learn/ interview/
-│       ├── router/  store/  components/
+│       ├── router/  store/  components/   ← components 含 AvatarStage.vue〔阶段二〕
 │       └── App.vue            ← 侧边栏导航四模块
-├── data/                      ← SQLite + Chroma 持久化（gitignore）
+├── data/                      ← SQLite + Chroma + tts_cache 持久化（gitignore）
 └── uploads/                   ← 上传文档与录音（gitignore）
 ```
 
@@ -95,8 +101,8 @@ Education-agent/
 | LLM 生成/分析 | 云端 DeepSeek/Qwen API |
 | Embedding | 云端 API（.env：EMBEDDING_PROVIDER=api）；离线兜底本地 bge-small-zh-v1.5 |
 | 重排序 | 云端 API；开发期 RERANK_ENABLED=false 先跳过，验收前开启 |
-| ASR 转写 | 本地 faster-whisper small + int8（14 核 CPU 接近实时，够用） |
-| 数字人渲染 | **阶段一不做**；阶段二用前端 2D 形象 + TTS + 音量驱动口型（零 GPU） |
+| ASR 转写 | 本地 faster-whisper small + int8（14 核 CPU 接近实时，够用）——**随工单20 移出本期，不安装** |
+| 数字人渲染 | ✅ 阶段二已做：前端 2D 形象（纯代码 SVG）+ **Edge-TTS** + 音量驱动口型，**全程零 GPU** |
 
 所有模型名、base_url、开关全部走 .env，代码中不得硬编码。
 
@@ -120,7 +126,29 @@ RERANK_BASE_URL=https://api.siliconflow.cn/v1
 RERANK_API_KEY=sk-xxx
 RERANK_MODEL=BAAI/bge-reranker-v2-m3
 
-# ASR（无GPU，禁止 medium/large）
+# ---------- 数字人 / TTS（阶段二，纯 CPU，无需 API Key） ----------
+# 总开关。false 时前端不朗读，形象仍在（只眨眼睛不说话）
+TTS_ENABLED=true
+# edge=本地 Edge-TTS；阶段三接云端数字人 API 时改为 cloud（需同时补 _synthesize_cloud 实现）
+TTS_PROVIDER=edge
+# 可选音色见 GET /api/tts/voices（8 个 zh-CN 音色）
+TTS_VOICE=zh-CN-XiaoxiaoNeural
+TTS_RATE=+0%
+TTS_VOLUME=+0%
+# 单次合成文本上限，超出按句读截断
+TTS_MAX_CHARS=300
+# 单句合成超时（秒）
+TTS_TIMEOUT_SECONDS=30
+# 代理。留空=跟随系统 HTTP(S)_PROXY；填值可改道（注意：关掉系统代理会让朗读失效）
+TTS_PROXY=
+# 合成结果落盘缓存：重复语句断网也能播，演示可靠性靠它兜底
+TTS_CACHE_ENABLED=true
+TTS_CACHE_DIR=./data/tts_cache
+# 形象驱动 provider。阶段三换云端数字人 SDK 时只改这一项，前端业务代码不动
+AVATAR_PROVIDER=svg-face
+
+# ---------- ASR〔工单20 已移出本期，配置项存档，本期不安装 faster-whisper〕 ----------
+# 将来启用时：无GPU，禁止 medium/large
 WHISPER_MODEL=small
 
 # 认证
@@ -226,6 +254,32 @@ UPLOAD_DIR=./uploads
 - 复盘管线（异步）：faster-whisper small+int8 转写（带说话人轮次）→ LLM 输出 JSON{总分0-100、总体评价、自我介绍点评、questions:[{问题,回答,得分,点评,优化版回答}]、修改建议[]} → 存 reviews，状态改"已复盘"
 - 前端 `/interview`：列表页（工单要求全字段；仅有录音的行显示"AI复盘"按钮；导入按钮+模板下载）+ 详情页四区（总体评价卡片/逐题解析/对话左右对照[左AI优化版右原始记录]/修改建议）
 - 验收：导入→上传录音→触发复盘→详情页四区完整展示
+
+### 阶段二（✅ 2026-09-17 完成）· 数字人形象层〔无工单号，源文件头注释用 `[阶段二]`〕
+
+**投入尺度**：竞品调研结论是形象层「已是成熟商品，不构成任何壁垒」，故刻意做薄——不引入 Live2D / 3D / viseme 音素级同步，只做「够演示、能替换」的最小闭环。
+
+**两个 provider 接口 + 各一个本地实现**（严格照第 19 行粒度；**Lip Sync 不是独立接口**，它是形象驱动接口的输入）：
+
+| 接口 | 本地实现 | 开关 |
+| --- | --- | --- |
+| 形象驱动 `frontend/src/avatar/provider.js` | `svg-face`（纯代码内联 SVG，零素材） | `AVATAR_PROVIDER` |
+| TTS `backend/app/services/tts.py` | `edge`（Edge-TTS，纯 CPU、无 Key、需联网 + 落盘缓存） | `TTS_PROVIDER` |
+
+沿用仓库既有的**函数式 provider 范式**（见 `services/embedding.py`）：具名实现 + 字符串开关 + 查找函数 + 未知值回退告警，**不引入 Protocol / ABC / 工厂**。
+
+**新增文件**：后端 `services/tts.py`、`api/tts.py`（`GET /api/tts/config`、`GET /api/tts/voices`、`POST /api/tts/speak` 返回音频字节流，**不包 `ApiResponse`**）；前端 `api/tts.js`、`audio/sentenceSplitter.js`、`audio/speechQueue.js`、`avatar/provider.js`、`components/AvatarStage.vue`、`store/avatar.js`。**挂载位置仅智能助教问答页 `Chat.vue`**，不动 `api/assistant.py` 的 SSE 契约。
+
+**四条职责边界（改代码前先读）**：
+
+1. **前端只管「在哪切句」，后端只管「怎么念」。** 切句必须在前端（要低延迟——首句不等整篇 `done` 就要开念）；Markdown 清洗必须放后端（前端无测试框架，而这段最易出错）。清洗后为空 → 后端回 400，**前端把 400 当「正常跳过」而非失败**（否则一篇回答里出现 3 个表格行就会误判「服务不可用」而停掉后续朗读）。
+2. **AudioContext 必须在用户手势的同步栈里创建/恢复**（`handleSend` 内、且在任何 `await` 之前）——一旦中间 await 过，浏览器就认为不是用户发起，autoplay 策略会挂起音频。
+3. **音量绝不能进 Vue 响应式。** 问答页每次 delta 都全量重跑 `marked.parse()`，已是热路径；音量再逐帧触发重渲染会直接卡死。做法是 rAF 直写 SVG 的 `d` 属性，只有 `speaking` 走响应式。
+4. **`decodeAudioData` 不可取消** → 用世代计数器（generation）让所有在途回调失效；`stop()` 挂在四处（停止生成 / 新建会话 / 切会话 / 组件卸载）。
+
+**验收**：43 条 pytest 全绿（**绝不真联网**，monkeypatch 掉合成实现）+ `capture_evidence.py` 的 avatar 场景 14/14 断言。关键两条断言是「音量峰值 > 0」「发声期间口型形状种类数 > 5」——**证明口型确由音频驱动，而不是按固定节奏播放的假动画**。
+
+**阶段三怎么接**：新增一个 provider 实现并在模块里登记，改 `.env` 的 `AVATAR_PROVIDER` / `TTS_PROVIDER`，问答页与舞台代码不动。
 
 ## 9. Windows 与工程红线
 
