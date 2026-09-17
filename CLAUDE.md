@@ -240,5 +240,5 @@ UPLOAD_DIR=./uploads
 ## 11. 已知缺口（待用户补充，不影响阶段一开工）
 
 1. **《教学场景智能体设计.pdf》不在仓库中**——工单 17/18/19 均以"根据《教学场景智能体设计.pdf》中的各个核心模块的流程梳理"为依据，但该附件缺失。目前以工单原文正文为准；用户提供后需回补核对。
-2. **sentence-transformers 当前不可用**（`numpy.core.multiarray failed to import`，numpy 2.x 与编译扩展冲突）。仅影响"离线兜底本地 bge-small-zh-v1.5"，主路径走云端 Embedding API 不受影响；需要时再修 numpy 版本。
+2. ~~**sentence-transformers 当前不可用**~~ —— **已于 2026-09-17（工单18 期间）修复**：根因是 conda 版 scipy/sklearn/pandas 是针对 numpy 1.x 编译的，与 numpy 2.5.x 冲突；已用 pip 升到 numpy 2 版轮子（`scipy 1.18.1` / `scikit-learn 1.9.1` / `pandas 3.0.5`）。本地兜底 Embedding 现可正常使用（`EMBEDDING_PROVIDER=local`，bge-small-zh-v1.5，CPU），实现改为 `transformers` + `torch` 手写 CLS 池化以避开 sklearn 依赖链。踩坑记录见 `docs/进度记录.md` 第八节。
 3. **faster-whisper 未安装**，工单 20 开工前需安装。
