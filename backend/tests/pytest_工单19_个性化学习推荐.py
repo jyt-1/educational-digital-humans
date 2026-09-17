@@ -15,6 +15,25 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal, foreign_keys_enabled
 from app.models.assistant import Conversation, KbChunk, KbDoc, Message
+from app.services.kp_match import (
+    METHOD_ALIAS,
+    METHOD_DICT,
+    METHOD_EXACT,
+    METHOD_NONE,
+    METHOD_PLACEHOLDER,
+    METHOD_VECTOR,
+    ON_UNMATCHED_DROP,
+    ON_UNMATCHED_PLACEHOLDER,
+    VECTOR_THRESHOLD,
+    KpIndex,
+    KpNode,
+    MatchResult,
+    load_index,
+    match_label,
+    match_text,
+    normalize_difficulty,
+    normalize_label,
+)
 
 # 一个必然不存在的父行 id，用于验证"悬空外键会被拒绝"
 _MISSING_ID = 999_999
@@ -124,6 +143,248 @@ def _count_chunks(db, doc_id: int) -> int:
 
 def _count_messages(db, conversation_id: int) -> int:
     return db.query(Message).filter(Message.conversation_id == conversation_id).count()
+
+
+# ============================================================ 知识点匹配（3.2.5）
+
+def _index() -> KpIndex:
+    """一张小图谱：足以覆盖全等 / 后缀 / 别名 / 词典 / 占位五条路径。"""
+    return KpIndex(
+        nodes=(
+            KpNode(id=1, name="梯度下降"),
+            KpNode(id=2, name="反向传播"),
+            KpNode(id=3, name="Adam优化器"),
+            KpNode(id=4, name="卷积神经网络"),
+            KpNode(id=5, name="神经网络"),
+            KpNode(id=99, name="未归类", is_placeholder=True),
+        ),
+        aliases={"adam": 3, "bp": 2},
+        placeholder_id=99,
+    )
+
+
+class TestNormalizeLabel:
+    """归一化是「两档上线」第一档的判据，也是别名表 norm_label 的写入格式——
+    两边必须走同一个函数，否则别名永远命中不了。"""
+
+    @pytest.mark.parametrize(
+        ("raw", "expect"),
+        [
+            ("梯度下降", "梯度下降"),
+            ("梯度下降法", "梯度下降"),  # 剥后缀
+            ("梯度下降算法", "梯度下降"),
+            ("  反向 传播 ", "反向传播"),  # 去空白
+            ("反向传播（BP）", "反向传播bp"),  # 去标点、全角折半角
+            ("ＡＤＡＭ", "adam"),  # 全角字母 + 大小写
+            ("Adam优化器", "adam优化器"),
+            ("", ""),
+            (None, ""),
+        ],
+    )
+    def test_normalize(self, raw, expect):
+        assert normalize_label(raw) == expect
+
+    def test_suffix_strip_keeps_short_names_intact(self):
+        """短名不能被剥空——"算法"本身若是个节点名，剥完就没了。"""
+        assert normalize_label("算法") == "算法"
+
+
+class TestNormalizeDifficulty:
+    """设计文档 3.2.6 的映射表。汇入时执行，不改工单17 已交付的原列。"""
+
+    @pytest.mark.parametrize(
+        ("raw", "expect"),
+        [
+            ("易", "简单"),
+            ("简单", "简单"),
+            ("基础", "简单"),
+            ("入门", "简单"),
+            ("难", "困难"),
+            ("困难", "困难"),
+            ("较难", "困难"),
+            ("进阶", "困难"),
+            ("高难", "困难"),
+            ("中等", "中等"),
+            ("中等偏上", "中等"),
+            (None, "中等"),
+            ("", "中等"),
+            ("随便什么", "中等"),
+        ],
+    )
+    def test_mapping(self, raw, expect):
+        assert normalize_difficulty(raw) == expect
+
+
+class TestMatchLabel:
+    def test_exact_after_suffix_normalization(self):
+        """工单17 生成的是"梯度下降法"，图谱节点是"梯度下降"——这一档要吃下大部分漂移。"""
+        result = match_label("梯度下降法", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert result is not None
+        assert (result.kp_id, result.method) == (1, METHOD_EXACT)
+
+    def test_alias_hit(self):
+        result = match_label("BP", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert result is not None
+        assert (result.kp_id, result.method) == (2, METHOD_ALIAS)
+
+    def test_unmatched_drops(self):
+        assert match_label("量子纠缠", index=_index(), on_unmatched=ON_UNMATCHED_DROP) is None
+
+    def test_unmatched_falls_back_to_placeholder(self):
+        """题目同步用 placeholder：题目由 LLM 生成，丢了就没了，一条不丢优先。"""
+        result = match_label("量子纠缠", index=_index(), on_unmatched=ON_UNMATCHED_PLACEHOLDER)
+        assert result is not None
+        assert result.kp_id == 99
+        assert result.method == METHOD_PLACEHOLDER
+        assert result.raw_text == "量子纠缠"  # 原始标签必须留着，供「待归并清单」回显
+
+    def test_placeholder_node_is_not_matchable(self):
+        """占位节点只承接兜底，不该被标签直接命中，否则「未归类」会变成一个大杂烩。"""
+        result = match_label("未归类", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert result is None
+
+    def test_empty_text(self):
+        assert match_label("   ", index=_index(), on_unmatched=ON_UNMATCHED_DROP) is None
+
+
+class TestMatchText:
+    """整句口语化提问。要点是**先把知识点从句子里抠出来**，而不是对整句做向量匹配。"""
+
+    def test_extracts_alias_substring(self):
+        """"Adam 是啥"与"Adam优化器"的余弦并不高，但词典里有短别名 "Adam" 就能直接命中。"""
+        results = match_text("Adam 是啥", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert [r.kp_id for r in results] == [3]
+        assert results[0].method == METHOD_DICT
+
+    def test_longest_match_wins(self):
+        """「卷积神经网络」应当整词命中，不能只挂到「神经网络」上。"""
+        results = match_text("卷积神经网络怎么训练", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert [r.kp_id for r in results] == [4]
+
+    def test_shorter_key_inside_longer_claim_is_skipped(self):
+        """短词若完全落在长词已占用的区间内，不再重复挂——否则挂靠全是噪声。"""
+        results = match_text("说说卷积神经网络", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert 5 not in [r.kp_id for r in results]
+
+    def test_multiple_knowledge_points_in_one_question(self):
+        """一条提问可以挂多个知识点（API 返回列表的原因）。"""
+        results = match_text(
+            "反向传播和梯度下降什么关系", index=_index(), on_unmatched=ON_UNMATCHED_DROP
+        )
+        assert {r.kp_id for r in results} == {1, 2}
+
+    def test_no_match_returns_empty_list(self):
+        assert match_text("今天天气不错", index=_index(), on_unmatched=ON_UNMATCHED_DROP) == []
+
+    def test_placeholder_policy_applies_to_text_too(self):
+        results = match_text("今天天气不错", index=_index(), on_unmatched=ON_UNMATCHED_PLACEHOLDER)
+        assert [r.kp_id for r in results] == [99]
+
+    def test_empty_text(self):
+        assert match_text(None, index=_index(), on_unmatched=ON_UNMATCHED_DROP) == []
+
+
+class TestVectorFallback:
+    """第三档默认关闭——判据是「未归类题目在练习候选集中占比 > 20%」，
+    而非全库占比（未归类的题本来就不参与取题）。签名里的开关必须先留好。"""
+
+    def test_off_by_default(self):
+        """开关关着时，即使给了 embedder 也不该走向量。"""
+        called = []
+
+        def _embed(texts):
+            called.append(texts)
+            return [[1.0, 0.0] for _ in texts]
+
+        result = match_label(
+            "梯度下降法", index=_index(), on_unmatched=ON_UNMATCHED_DROP, embed=_embed
+        )
+        assert result.method == METHOD_EXACT
+        assert called == []  # 第一档就命中了，压根不该去编码
+
+    def test_skipped_when_no_embedder(self):
+        """开了开关但没给 embedder：不能炸，退化为未命中。"""
+        result = match_label(
+            "量子纠缠", index=_index(), on_unmatched=ON_UNMATCHED_DROP, use_vector=True
+        )
+        assert result is None
+
+    def test_hits_when_enabled(self):
+        def _embed(texts):
+            # 「量子纠缠」与「梯度下降」在高维空间里对齐，其余正交
+            return [[1.0, 0.0] if t in ("量子纠缠", "梯度下降") else [0.0, 1.0] for t in texts]
+
+        result = match_label(
+            "量子纠缠",
+            index=_index(),
+            on_unmatched=ON_UNMATCHED_DROP,
+            use_vector=True,
+            embed=_embed,
+        )
+        assert result is not None
+        assert (result.kp_id, result.method) == (1, METHOD_VECTOR)
+        assert result.confidence >= VECTOR_THRESHOLD
+
+    def test_below_threshold_does_not_match(self):
+        def _embed(texts):
+            return [[1.0, 0.0] if t == "量子纠缠" else [0.6, 0.8] for t in texts]
+
+        result = match_label(
+            "量子纠缠",
+            index=_index(),
+            on_unmatched=ON_UNMATCHED_DROP,
+            use_vector=True,
+            embed=_embed,
+        )
+        assert result is None
+
+
+class TestMatchResultContract:
+    """`/learn/related` 的三个出口、`/kp/sync` 的报告与导入失败明细都依赖这个结构。"""
+
+    def test_to_dict_shape(self):
+        result = match_label("梯度下降法", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert result.to_dict() == {
+            "raw_text": "梯度下降法",
+            "kp_id": 1,
+            "matched_text": "梯度下降",
+            "method": METHOD_EXACT,
+            "confidence": 1.0,
+        }
+
+    def test_matched_property(self):
+        hit = match_label("梯度下降", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        miss = MatchResult("x", None, None, METHOD_NONE, 0.0)
+        assert hit.matched is True
+        assert miss.matched is False
+
+
+class TestLoadIndex:
+    """`load_index` 是本模块唯一接触数据库的函数，且只读。"""
+
+    def test_loads_nodes_aliases_and_placeholder(self, client):
+        from app.db import SessionLocal
+        from app.models.learn import KpAlias, KnowledgePoint
+
+        db = SessionLocal()
+        try:
+            kp = KnowledgePoint(course="测试课程", name="贝叶斯定理")
+            db.add(kp)
+            db.flush()
+            db.add(KpAlias(raw_label="贝叶斯", norm_label="贝叶斯", kp_id=kp.id, source="manual"))
+            db.add(
+                KnowledgePoint(course="测试课程", name="未归类", is_placeholder=1, order_no=999)
+            )
+            db.commit()
+
+            index = load_index(db, course="测试课程")
+
+            assert index.placeholder_id is not None
+            assert any(n.name == "贝叶斯定理" for n in index.nodes)
+            assert index.aliases.get("贝叶斯") == kp.id
+        finally:
+            db.rollback()
+            db.close()
 
 
 class TestMigration:
