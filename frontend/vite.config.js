@@ -31,7 +31,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // 必须写 127.0.0.1 而非 localhost：Node 会把 localhost 解析到 IPv6 的 ::1，
+        // 而 uvicorn 默认只监听 IPv4 的 127.0.0.1，走 localhost 会代理到空端口 → HTTP 502
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         // SSE 必须关闭代理层缓冲，否则流式会被攒成一坨再返回
         configure: (proxy) => {
