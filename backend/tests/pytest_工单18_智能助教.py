@@ -256,8 +256,14 @@ class TestParsers:
         assert any("面试复盘记录" in b.content for b in blocks[1:])
 
     def test_image_document_uses_original_path(self, tmp_path):
+        """图片文档登记的是**原文件**相对 uploads/ 的路径，引用回显时不复制不转码。
+
+        `rel_prefix` 是目录（与 `base.save_image_bytes` 及 `kb_ingest` 的调用一致），
+        文件名由解析器接在后面——曾经这里传的是整个文件路径，解析器也原样返回，
+        结果 `kb_ingest` 传目录进来时存进了目录本身，回显时打开目录报 500。
+        """
         path = _write(tmp_path, "diagram.png", _make_png())
-        blocks = parse_document(path, rel_prefix="kb/9/diagram.png")
+        blocks = parse_document(path, image_dir=tmp_path / "img", rel_prefix="kb/9")
 
         assert blocks[0].block_type == "image"
         assert blocks[0].image_path == "kb/9/diagram.png"
@@ -408,6 +414,46 @@ class TestIngestPipeline:
 
         assert client.delete(f"/api/kb/docs/{doc_id}", headers=auth(teacher_token)).status_code == 200
         assert client.get(f"/api/kb/docs/{doc_id}", headers=auth(teacher_token)).status_code == 404
+
+    def test_image_doc_chunk_serves_original_bytes(self, client, auth, teacher_token):
+        """图片文档入库后，图片块能按登记的路径取回原图（引用回显）。
+
+        这条卡住过一个真实的 500：图片解析器把 `rel_prefix`（目录）当成完整路径存了进去，
+        `kb_ingest` 传的是 `kb/{doc_id}`，于是 `image_path` 是**目录**；
+        回显接口用 `exists()` 判断存在（对目录也返回 True），`FileResponse(目录)` 发送时才炸。
+        """
+        doc_id = _upload(client, auth, teacher_token, "结构示意图.png", _make_png()).json()["data"]["id"]
+        detail = _wait_done(client, auth, teacher_token, doc_id)
+
+        chunks = [c for c in detail["chunks"] if c["chunk_type"] == "image"]
+        assert chunks, "图片文档应产出 image 块"
+        image_path = chunks[0]["image_path"]
+        # 必须是"目录/文件名"，不能只是目录
+        assert image_path.startswith(f"kb/{doc_id}/")
+        assert not image_path.endswith(f"kb/{doc_id}")
+
+        resp = client.get(f"/api/kb/chunks/{chunks[0]['id']}/image", headers=auth(teacher_token))
+        assert resp.status_code == 200, resp.text
+        assert resp.content == _make_png()
+
+    def test_image_chunk_with_broken_path_returns_404_not_500(self, client, auth, teacher_token):
+        """历史脏数据（image_path 指向目录）只能 404，不能 500——
+        目录对 `exists()` 也为真，早期就是这么炸的。"""
+        from app.db import SessionLocal
+        from app.models.assistant import KbChunk
+
+        doc_id = _upload(client, auth, teacher_token, "示意图.png", _make_png()).json()["data"]["id"]
+        detail = _wait_done(client, auth, teacher_token, doc_id)
+        chunk = next(c for c in detail["chunks"] if c["chunk_type"] == "image")
+
+        with SessionLocal() as db:
+            row = db.get(KbChunk, chunk["id"])
+            row.image_path = f"kb/{doc_id}"  # 还原成旧版存进去的目录
+            db.commit()
+
+        resp = client.get(f"/api/kb/chunks/{chunk['id']}/image", headers=auth(teacher_token))
+        assert resp.status_code == 404
+        assert "丢失" in resp.json()["msg"]
 
 
 class TestHybridSearch:

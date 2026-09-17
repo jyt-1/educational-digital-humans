@@ -264,7 +264,9 @@ def chunk_image(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权查看该图片")
 
     abs_path = settings.upload_dir / chunk.image_path
-    if not abs_path.exists():
+    # 必须 is_file()：早期 image_parser 存过目录（"kb/5"），exists() 对目录也返回 True，
+    # 于是 FileResponse 打开目录在发送时才炸成 500。老数据靠这里兜住，报 404 而不是 500。
+    if not abs_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片文件已丢失")
     media_type = _MEDIA_TYPES.get(Path(chunk.image_path).suffix.lower(), "application/octet-stream")
     return FileResponse(path=str(abs_path), media_type=media_type)
