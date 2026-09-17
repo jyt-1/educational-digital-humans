@@ -40,6 +40,13 @@ http.interceptors.response.use(
     const status = error.response?.status
     const msg = error.response?.data?.msg || error.message || '网络异常'
 
+    // 增强类接口（阶段二语音合成）可传 silent: true 静默失败：
+    // 语音不可用时前端逐句降级跳过即可，不该每句弹一次 toast 打断阅读。
+    // 注意 401 仍要照常处理——登录过期必须跳登录页。
+    if (error.config?.silent && status !== 401) {
+      return Promise.reject(error)
+    }
+
     if (status === 401) {
       clearAuth()
       ElMessage.error('登录已过期，请重新登录')
