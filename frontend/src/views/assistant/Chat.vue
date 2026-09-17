@@ -104,12 +104,15 @@
 
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Plus, Promotion } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 
 import { chatStream, deleteConversation, getConversation, listConversations } from '@/api/assistant'
 import CitationList from '@/components/CitationList.vue'
+
+const route = useRoute()
 
 const conversations = ref([])
 const conversationId = ref(null)
@@ -291,7 +294,22 @@ async function handleSend() {
   }
 }
 
-onMounted(loadConversations)
+// 「相关提问 / 相关学习」面板（错题详情页侧栏、仪表盘今日任务、学习路径每个节点）
+// 跳到本页时带 ?q= 或 ?conversation=。不读这两个参数的话，点过去只会落在一个空会话上，
+// 联动助教这条链路就是断的。
+onMounted(async () => {
+  await loadConversations()
+  const presetConversation = Number(route.query.conversation)
+  if (presetConversation) {
+    await loadConversation(presetConversation)
+  }
+  const presetQuestion = String(route.query.q || '').trim()
+  if (presetQuestion) {
+    input.value = presetQuestion
+    // 预填而不是直接发：学生可能想改一改再问，且自动发问会立刻消耗一次 LLM 调用
+    ElMessage.info('已带入推荐问题，可直接发送或修改')
+  }
+})
 
 onBeforeUnmount(() => {
   controller?.abort()
