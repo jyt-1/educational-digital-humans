@@ -62,9 +62,24 @@
 
           <div class="q-stem rendered-md" v-html="render(question.stem)"></div>
 
-          <!-- 有选项：单选；无选项：文本输入 -->
+          <!-- 有选项：多选/单选；无选项：文本输入 -->
+          <el-checkbox-group
+            v-if="question.options?.length && isMulti(question)"
+            v-model="answers[question.question_id]"
+            :disabled="!!results[question.question_id]"
+            class="q-options"
+          >
+            <el-checkbox
+              v-for="option in question.options"
+              :key="option"
+              :value="letterOf(option)"
+              class="q-option"
+            >
+              {{ option }}
+            </el-checkbox>
+          </el-checkbox-group>
           <el-radio-group
-            v-if="question.options?.length"
+            v-else-if="question.options?.length"
             v-model="answers[question.question_id]"
             :disabled="!!results[question.question_id]"
             class="q-options"
@@ -161,8 +176,23 @@
             <el-tag size="small" type="info" effect="plain">{{ question.qtype }}</el-tag>
           </div>
           <div class="q-stem rendered-md" v-html="render(question.stem)"></div>
+          <el-checkbox-group
+            v-if="question.options?.length && isMulti(question)"
+            v-model="examAnswers[question.question_id]"
+            :disabled="!!examResult"
+            class="q-options"
+          >
+            <el-checkbox
+              v-for="option in question.options"
+              :key="option"
+              :value="letterOf(option)"
+              class="q-option"
+            >
+              {{ option }}
+            </el-checkbox>
+          </el-checkbox-group>
           <el-radio-group
-            v-if="question.options?.length"
+            v-else-if="question.options?.length"
             v-model="examAnswers[question.question_id]"
             :disabled="!!examResult"
             class="q-options"
@@ -277,6 +307,26 @@ function letterOf(option) {
   return matched ? matched[1].toUpperCase() : option
 }
 
+// 多选题必须用多选框：它的正确答案形如 "ABC"，用单选控件无论怎么选都选中不了第二个字母，
+// 学生会一直被判错——而判错会写进画像、拉低掌握度、改推荐路径，等于把演示数据污染成假的。
+// 判据用 qtype（题目自带的类型字段），不靠猜。
+function isMulti(question) {
+  return question?.qtype === '多选'
+}
+
+// 答案归一：多选在界面上是数组，提交前拼成 "ABC"（后端按集合比较，"CBA" 同样判对，排序只为日志好看）
+function collect(value) {
+  if (Array.isArray(value)) return value.length ? [...value].sort().join('') : null
+  return value || null
+}
+
+// 多选的 v-model 必须是数组，undefined 会让多选框组拿不到初值
+function initAnswerSlots(store, list) {
+  ;(list || []).forEach((question) => {
+    if (isMulti(question)) store[question.question_id] = []
+  })
+}
+
 function resetFeedback() {
   Object.keys(answers).forEach((key) => delete answers[key])
   Object.keys(results).forEach((key) => delete results[key])
@@ -300,6 +350,7 @@ async function loadPractice() {
     if (kpId.value) params.kp_id = kpId.value
     const data = await getPractice(params)
     questions.value = data.questions || []
+    initAnswerSlots(answers, questions.value)
     meta.difficulty = data.difficulty || null
     meta.promote_streak = data.promote_streak || 3
     meta.streak_correct = data.streak_correct || 0
@@ -320,7 +371,7 @@ async function submitOne(question) {
   try {
     const data = await submitAnswer({
       question_id: question.question_id,
-      user_answer: answers[question.question_id] || null,
+      user_answer: collect(answers[question.question_id]),
     })
     results[question.question_id] = data
     meta.difficulty = data.difficulty || meta.difficulty
@@ -342,6 +393,7 @@ async function loadExam() {
   try {
     const data = await getExam({})
     exam.value = data
+    initAnswerSlots(examAnswers, data.questions)
     if (!data.questions?.length) {
       emptyMessage.value = data.message || '还没有可用的试卷'
     }
@@ -364,7 +416,7 @@ async function submitPaper() {
       plan_id: exam.value.plan_id,
       answers: (exam.value.questions || []).map((question) => ({
         question_id: question.question_id,
-        user_answer: examAnswers[question.question_id] || null,
+        user_answer: collect(examAnswers[question.question_id]),
       })),
     })
     examResult.value = data
@@ -458,6 +510,11 @@ onMounted(() => {
 .q-option {
   height: auto;
   white-space: normal;
+}
+
+/* 多选框组也用 .q-options 排成竖列，去掉 EP 默认的右外边距免得对不齐 */
+.q-options :deep(.el-checkbox) {
+  margin-right: 0;
 }
 
 .q-actions {

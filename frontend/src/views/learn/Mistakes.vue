@@ -149,8 +149,23 @@
             <div v-for="(variant, index) in detail.variant_questions" :key="variant.question_id" class="variant">
               <div class="variant-head">变式 {{ index + 1 }}</div>
               <div class="rendered-md" v-html="render(variant.stem)"></div>
+              <el-checkbox-group
+                v-if="variant.options?.length && isMultiVariant(variant)"
+                v-model="variantAnswers[variant.question_id]"
+                :disabled="!!variantResults[variant.question_id]"
+                class="variant-options"
+              >
+                <el-checkbox
+                  v-for="option in variant.options"
+                  :key="option"
+                  :value="letterOf(option)"
+                  class="variant-option"
+                >
+                  {{ option }}
+                </el-checkbox>
+              </el-checkbox-group>
               <el-radio-group
-                v-if="variant.options?.length"
+                v-else-if="variant.options?.length"
                 v-model="variantAnswers[variant.question_id]"
                 :disabled="!!variantResults[variant.question_id]"
                 class="variant-options"
@@ -288,6 +303,29 @@ function letterOf(option) {
   return matched ? matched[1].toUpperCase() : option
 }
 
+// 变式题的答案就在本地（「看答案与解析」是客户端揭示），所以这里直接据答案判定是否多选。
+// 只认"全由选项字母组成且不止一个"的答案：这样 "ABCD" 是多选，而 "Adam"、"链式法则" 这类
+// 文本答案里恰好带字母的不会被误判成多选。
+function isMultiVariant(variant) {
+  const answer = String(variant?.answer || '').toUpperCase()
+  if (answer.length < 2) return false
+  const letters = (variant?.options || []).map((option) => letterOf(option))
+  return [...answer].every((char) => letters.includes(char))
+}
+
+// 答案归一：多选在界面上是数组，提交前拼成 "ABC"（后端按集合比较，"CBA" 同样判对）
+function collect(value) {
+  if (Array.isArray(value)) return value.length ? [...value].sort().join('') : null
+  return value || null
+}
+
+// 多选的 v-model 必须是数组；详情每次重载都会换一批变式题，槽位跟着重来
+function initVariantSlots(list) {
+  ;(list || []).forEach((variant) => {
+    if (isMultiVariant(variant)) variantAnswers[variant.question_id] = []
+  })
+}
+
 async function load() {
   loading.value = true
   try {
@@ -313,6 +351,7 @@ async function loadNodes() {
 
 function applyDetail(data) {
   detail.value = data
+  initVariantSlots(data.variant_questions)
   analysis.value = data.analysis || null
   if (!data.analysis && data.analysis_status === 'failed') {
     analysisError.value = '上次分析未成功，可重试'
@@ -362,12 +401,21 @@ async function submitVariant(variant) {
   try {
     const data = await answerVariant(detail.value.mistake_id, {
       question_id: variant.question_id,
-      user_answer: variantAnswers[variant.question_id] || null,
+      user_answer: collect(variantAnswers[variant.question_id]),
     })
     variantResults[variant.question_id] = data
     // 再错会触发重新分析 → 整条详情都要换掉，否则旧诊断与新变式题对不上
     if (!data.is_correct) {
+      // 但重新分析会**换一批变式题**，刚作答的那道就从列表里消失了——
+      // 判分、正确答案、这道题的解析会跟着一起不见，学生点完「提交」只看到题目被换掉，
+      // 等于白答。所以把答过的那道留在列表最前（它的结果还在 variantResults 里，
+      // 控件自动置灰、反馈块照常显示），新题排在后面。
+      const answered = { ...variant }
       applyDetail(data.mistake)
+      const list = detail.value.variant_questions || []
+      if (!list.some((item) => item.question_id === answered.question_id)) {
+        detail.value.variant_questions = [answered, ...list]
+      }
       ElMessage.warning('又答错了，已重新分析')
       load()
     }
@@ -525,6 +573,11 @@ onMounted(() => {
 .variant-option {
   height: auto;
   white-space: normal;
+}
+
+/* 多选框组也用 .variant-options 排成竖列，去掉 EP 默认的右外边距免得对不齐 */
+.variant-options :deep(.el-checkbox) {
+  margin-right: 0;
 }
 
 .variant-actions {
