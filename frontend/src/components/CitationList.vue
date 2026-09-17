@@ -80,14 +80,16 @@ function setCardRef(index, el) {
 }
 
 const TYPE_LABELS = { text: '正文', table: '表格', image: '图片', formula: '公式' }
-const TYPE_TAGS = { text: '', table: 'success', image: 'warning', formula: 'danger' }
+// 正文给 primary，与 el-tag 的默认样式一致。写成空串会触发
+// "Invalid prop: validation failed for prop type" 警告（控制台里刷 14 条）。
+const TYPE_TAGS = { text: 'primary', table: 'success', image: 'warning', formula: 'danger' }
 
 function typeLabel(type) {
   return TYPE_LABELS[type] || type || '正文'
 }
 
 function typeTag(type) {
-  return TYPE_TAGS[type] ?? ''
+  return TYPE_TAGS[type] ?? 'primary'
 }
 
 function render(text) {
