@@ -1,5 +1,6 @@
 # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 备课 Prompt 模板
-"""五类备课内容（教案/课件/习题/案例/试题）的 Prompt 构造。
+# [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— 追加 AIGC 错题分析 Prompt（3.2.7）
+"""五类备课内容（教案/课件/习题/案例/试题）的 Prompt 构造 + 错题分析 Prompt。
 
 内容合规要求见设计文档 5.4 节：生成内容须符合教学规范与社会主义核心价值观。
 """
@@ -233,6 +234,107 @@ _USER_TEMPLATES: dict[str, str] = {
 
 
 # ---------------------------------------------------------------- 结构化内容组装
+
+# ---------------------------------------------------------------- 错题分析（工单19）
+
+# 工单19 原文把「Prompt 设计」列为核心，并点名要求输入包含
+# {原题干、学生错误答案、正确答案、所属知识点、预设的常见错误类型}。
+# 此处逐一对应，见设计文档 3.2.7 的输入字段表。
+_TEMPLATE_MISTAKE = """一名高职院校学生在一道{subject}题目上答错了，请完成错题分析并给出变式题。
+
+【原题干】
+{stem}
+{options_block}
+【题型】{qtype}
+【学生的错误答案】{user_answer}
+【正确答案】{correct_answer}
+【所属知识点】{kp_line}
+{misconception_block}
+【要求】
+1. `analysis`：面向高职学生的**深入浅出**解析。先讲清这道题在考什么、正确思路怎么走，
+   再指出本题的关键点。不要复述题干，不要写"本题考察了……"这类空话。
+2. `misconception`：**错误原因诊断**——说清学生为什么会选错、脑子里可能是哪个概念拧了。
+3. `misconception_type`：上一条归因**必须命中一个具体的错误类型**（不是"概念不清"这种笼统说法）。
+   {misconception_rule}
+4. 若上一步是"先推断"，把推断出的 3~5 个该知识点的常见错误类型填进 `inferred_misconceptions`。
+5. `variant_questions`：{variant_count} 道**同知识点**变式题，用于巩固同一个薄弱点。
+   变式题必须与本题**考法不同**（换情境、换问法或反向提问），不能只改数字。
+6. 全面遵守上述 JSON 格式，不要输出任何额外文字。
+
+严格按以下 JSON 结构输出：
+{{
+  "analysis": "深入浅出的题目解析",
+  "misconception": "错误原因诊断",
+  "misconception_type": "命中的错误类型",
+  "inferred_misconceptions": ["推断出的常见错误类型"],
+  "variant_questions": [
+    {{"stem": "变式题题干", "options": ["A. 选项内容", "B. 选项内容"], "answer": "A", "analysis": "变式题解析"}}
+  ]
+}}"""
+
+
+def build_mistake_messages(
+    *,
+    stem: str,
+    options: list[str] | None,
+    user_answer: str | None,
+    correct_answer: str | None,
+    kp_name: str | None,
+    prereq_chain: list[str] | None = None,
+    common_misconceptions: list[str] | None = None,
+    qtype: str | None = None,
+    subject: str = "人工智能",
+    variant_count: int = 3,
+) -> list[dict]:
+    """组装错题分析的对话消息（设计文档 3.2.7）。
+
+    **"预设的常见错误类型"有值就注入、为空就要求 LLM 先推断再归因**——这是本工单
+    对 Prompt 的硬性要求里最容易漏的一条：知识点有预设时归因才有针对性，
+    没有预设时若不给"先推断"这一步，模型会退化成"概念理解不清"这类无信息量的套话。
+    """
+    options = [opt for opt in (options or []) if str(opt).strip()]
+    options_block = ("【选项】\n" + "\n".join(str(opt) for opt in options) + "\n") if options else ""
+
+    kp_line = kp_name or "（未标注）"
+    if prereq_chain:
+        kp_line += f"（前置知识：{' → '.join(prereq_chain)}）"
+
+    presets = [str(item).strip() for item in (common_misconceptions or []) if str(item).strip()]
+    if presets:
+        misconception_block = (
+            "【该知识点已归纳的常见错误类型】\n"
+            + "\n".join(f"- {item}" for item in presets)
+            + "\n"
+        )
+        misconception_rule = (
+            "从上面列出的「已归纳的常见错误类型」中**原样选取**一条填入，"
+            "不得自造新的说法；确实都不贴切时才允许另拟，并在 `misconception_type` 中说明。"
+        )
+    else:
+        misconception_block = ""
+        misconception_rule = (
+            "该知识点**尚未归纳**常见错误类型，请**先推断**该知识点在高职学生中 "
+            "3~5 个典型错误类型（填入 `inferred_misconceptions`），**再据此归因**，"
+            "`misconception_type` 必须取自你推断出的那几条之一。"
+        )
+
+    content = _TEMPLATE_MISTAKE.format(
+        subject=subject,
+        stem=stem,
+        options_block=options_block,
+        qtype=qtype or "（未标注）",
+        user_answer=user_answer or "（未作答）",
+        correct_answer=correct_answer or "（未提供）",
+        kp_line=kp_line,
+        misconception_block=misconception_block,
+        misconception_rule=misconception_rule,
+        variant_count=variant_count,
+    )
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": content},
+    ]
+
 
 def build_content_payload(content_type: str, raw_text: str, parsed: dict | list | None) -> str:
     """把流式产出的原始文本与解析结果组装为 teaching_plans.content_json。

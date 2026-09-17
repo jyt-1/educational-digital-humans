@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     KB_TOP_K: int = 5               # 检索返回条数
     KB_MAX_UPLOAD_MB: int = 50      # 单文档大小上限
 
+    # ---------- 个性化学习（工单19） ----------
+    # 跨用户常用问题聚合的总开关。关闭时高频栏退化为只显示 kp_faq 中 source='seed'
+    # 的种子问题——聚合等于部分打破 conversations「按 user_id 隔离」的承诺，
+    # 故留一个可一键关闭的开关（设计文档 2.2 场景三第 7 条）
+    ASSISTANT_HOTQ_ENABLED: bool = True
+
     # ---------- ASR ----------
     WHISPER_MODEL: str = "small"
 
