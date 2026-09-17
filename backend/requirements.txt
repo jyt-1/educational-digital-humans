@@ -32,9 +32,19 @@ chromadb>=0.5
 rank-bm25>=0.2.2
 jieba>=0.42
 
-# --- ASR（工单20，纯 CPU） ---
-faster-whisper>=1.0
+# --- ASR（工单20，纯 CPU）—— 【本期不装】 ---
+# 工单20（面试 AI 复盘）已移出本期交付范围（2026-09-17 用户决策），ASR 在阶段一已无消费方；
+# CLAUDE.md §1/§11 明确要求「本期不要安装 faster-whisper」。
+# 更要紧的是它可能连带拉取 CUDA 版 torch —— 本机无独显，CLAUDE.md §9 的红线。
+# 将来若重启工单20 再取消注释。
+# faster-whisper>=1.0
 
 # --- 测试 ---
 pytest>=8.0
 httpx>=0.27
+
+# --- 验收取证（工单17/18/19） ---
+# 只用于 scripts/capture_evidence.py：驱动**本机已装的 Edge**（channel="msedge"），
+# 不下载 Chromium（本机无独显，也没必要）。装完需 `python -m playwright install` 的话可跳过——
+# 用系统 Edge 就不需要。与阶段二的数字人依赖无关，纯测试工具。
+playwright>=1.40
