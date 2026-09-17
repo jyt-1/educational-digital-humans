@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     RERANK_API_KEY: str = ""
     RERANK_MODEL: str = "BAAI/bge-reranker-v2-m3"
 
+    # ---------- 知识库 / RAG（工单18） ----------
+    CHROMA_DIR: str = "./data/chroma"
+    KB_CHUNK_SIZE: int = 500        # 切块长度（约 500 字）
+    KB_CHUNK_OVERLAP: int = 80      # 相邻块重叠字数
+    KB_TOP_K: int = 5               # 检索返回条数
+    KB_MAX_UPLOAD_MB: int = 50      # 单文档大小上限
+
     # ---------- ASR ----------
     WHISPER_MODEL: str = "small"
 
@@ -56,6 +63,16 @@ class Settings(BaseSettings):
     def upload_dir(self) -> Path:
         return self._resolve(self.UPLOAD_DIR)
 
+    @property
+    def chroma_dir(self) -> Path:
+        """ChromaDB 持久化目录（设计文档 3.2 节：collection 按知识库隔离）。"""
+        return self._resolve(self.CHROMA_DIR)
+
+    @property
+    def kb_image_dir(self) -> Path:
+        """知识库文档中抽取出的图片与表格截图存放目录（工单18 引用回显用）。"""
+        return self.upload_dir / "kb"
+
     @staticmethod
     def _resolve(raw: str) -> Path:
         p = Path(raw)
@@ -74,3 +91,5 @@ settings = Settings()
 # 启动即确保运行期目录存在（data/ 与 uploads/ 已在 .gitignore 中）
 settings.data_dir.mkdir(parents=True, exist_ok=True)
 settings.upload_dir.mkdir(parents=True, exist_ok=True)
+settings.chroma_dir.mkdir(parents=True, exist_ok=True)
+settings.kb_image_dir.mkdir(parents=True, exist_ok=True)

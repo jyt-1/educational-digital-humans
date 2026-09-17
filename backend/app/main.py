@@ -13,7 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api import assistant as assistant_api
 from app.api import auth as auth_api
+from app.api import kb as kb_api
 from app.api import lesson as lesson_api
 from app.config import settings
 from app.db import init_db
@@ -80,6 +82,8 @@ async def validation_exception_handler(_request: Request, exc: RequestValidation
 # ------------------------------------------------------------ 路由注册
 app.include_router(auth_api.router)
 app.include_router(lesson_api.router)
+app.include_router(kb_api.router)
+app.include_router(assistant_api.router)
 
 
 @app.get("/api/health", tags=["系统"], summary="健康检查")
