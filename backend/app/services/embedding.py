@@ -20,7 +20,15 @@ logger = logging.getLogger(__name__)
 _BATCH_SIZE = 16
 _REQUEST_TIMEOUT = 90.0
 
+_local_tokenizer = None
 _local_model = None
+
+
+def active_model_name() -> str:
+    """当前生效的向量模型名（用于向量库维度/模型一致性校验）。"""
+    if settings.EMBEDDING_PROVIDER.lower() == "local":
+        return settings.EMBEDDING_LOCAL_MODEL
+    return settings.EMBEDDING_MODEL
 
 
 class EmbeddingNotConfiguredError(RuntimeError):
@@ -70,23 +78,59 @@ async def embed_query(text: str) -> list[float]:
     return vectors[0]
 
 
-def _embed_local(texts: list[str]) -> list[list[float]]:
-    """本地兜底：bge-small-zh-v1.5。
+def _load_local_model():
+    """懒加载本地句向量模型，返回 (tokenizer, model)。
 
-    注意：本机 sentence-transformers 目前因 numpy 2.x 扩展冲突不可用
-    （CLAUDE.md 第 11 节已知缺口），此路径仅在主路径不可用时启用。
+    实现说明：**不用 sentence-transformers**。本机（Anaconda base 环境）的
+    pandas/sklearn 是 conda 用 NumPy 1.x 编译的，而 `numpy` 已升到 2.5.x，
+    sentence-transformers → sklearn → scipy.sparse 一导入就 `numpy.core.multiarray
+    failed to import`（CLAUDE.md 第 11 节已知缺口）。transformers + torch 这条链路
+    不依赖 sklearn/scipy，能直接跑，于是本地兜底改为手写 CLS 池化。
     """
-    global _local_model
+    global _local_tokenizer, _local_model
+    if _local_model is not None:
+        return _local_tokenizer, _local_model
+
     try:
-        from sentence_transformers import SentenceTransformer
+        import torch  # noqa: F401 - 仅确认可用
+        from transformers import AutoModel, AutoTokenizer
     except Exception as exc:  # noqa: BLE001
         raise EmbeddingNotConfiguredError(
-            "本地 Embedding 不可用（sentence-transformers 导入失败，参见 CLAUDE.md 第 11 节）。"
-            "请改用 EMBEDDING_PROVIDER=api。"
+            f"本地 Embedding 不可用（transformers/torch 导入失败：{exc}）。"
+            "请改用 EMBEDDING_PROVIDER=api 并配置 EMBEDDING_API_KEY。"
         ) from exc
 
-    if _local_model is None:
-        logger.info("加载本地 Embedding 模型：%s", settings.EMBEDDING_MODEL)
-        _local_model = SentenceTransformer(settings.EMBEDDING_MODEL)
-    vectors = _local_model.encode(texts, normalize_embeddings=True)
-    return [list(map(float, vec)) for vec in vectors]
+    name = settings.EMBEDDING_LOCAL_MODEL
+    if any(flag in name.lower() for flag in ("m3", "large", "bge-m3")):
+        logger.warning(
+            "本地 Embedding 模型 %s 体积大、无 GPU 时很慢，建议改用 bge-small-zh-v1.5", name
+        )
+    logger.info("加载本地 Embedding 模型：%s（CPU）", name)
+    _local_tokenizer = AutoTokenizer.from_pretrained(name)
+    model = AutoModel.from_pretrained(name)
+    model.eval()
+    _local_model = model
+    return _local_tokenizer, _local_model
+
+
+def _embed_local(texts: list[str]) -> list[list[float]]:
+    """本地兜底：bge-small-zh-v1.5（CPU，无 GPU 依赖）。
+
+    bge 系列句向量取 [CLS] 位再做 L2 归一化，与官方用法一致；
+    归一化后 Chroma 用余弦距离检索等价于内积排序。
+    """
+    import torch
+
+    tokenizer, model = _load_local_model()
+    vectors: list[list[float]] = []
+    with torch.no_grad():
+        for start in range(0, len(texts), _BATCH_SIZE):
+            batch = texts[start : start + _BATCH_SIZE]
+            encoded = tokenizer(
+                batch, padding=True, truncation=True, max_length=512, return_tensors="pt"
+            )
+            hidden = model(**encoded).last_hidden_state[:, 0]
+            normalized = torch.nn.functional.normalize(hidden, p=2, dim=1)
+            vectors.extend(normalized.tolist())
+    logger.info("本地 Embedding 完成：%d 条（模型 %s）", len(vectors), settings.EMBEDDING_LOCAL_MODEL)
+    return vectors

@@ -8,7 +8,7 @@
 - 混合检索：向量 + BM25 → RRF 融合、top5 引用元数据、能命中指定页的表格；
 - 权限隔离：公共库仅教师可写、私有库按用户物理隔离（三重保障的接口层校验）；
 - 问答：SSE 事件流（sources/delta/done）、引用落库、多轮上下文、LLM 未配置的错误提示；
-- 降级：重排服务不可用时自动回退混合检索顺序。
+- 降级：重排服务不可用时自动回退混合检索顺序；向量库与 Embedding 配置不一致时拦截并降级为关键词召回。
 
 Embedding 与 LLM 全部 mock，测试不依赖真实 API Key 与网络。
 """
@@ -26,9 +26,10 @@ from openpyxl import Workbook
 from pptx import Presentation
 from pptx.util import Inches
 
+from app.config import settings
 from app.models.assistant import PARSE_DONE, PARSE_FAILED
 from app.services import assistant as assistant_service
-from app.services import embedding, llm_client, retriever
+from app.services import embedding, llm_client, retriever, vector_store
 from app.services.chunking import chunk_blocks
 from app.services.parsers import detect_file_type, parse_document
 from app.services.parsers.base import ParsedBlock, looks_formula
@@ -498,7 +499,63 @@ class TestHybridSearch:
         assert all("rerank" not in c["matched_by"] for c in citations)
 
 
-# ============================================================ 四、权限隔离
+# ============================================================ 四、向量库配置一致性
+
+class TestVectorStoreSignature:
+    """换 Embedding 模型（云端 bge-m3 1024 维 ↔ 本地 bge-small 512 维）时，
+    维度不一致必须给出可读原因，而不是让 Chroma 抛晦涩的维度错误。"""
+
+    @pytest.fixture
+    def restore_signature(self):
+        """备份并还原向量库签名文件，避免污染同会话的其它用例。"""
+        path = settings.chroma_dir / vector_store._SIGNATURE_FILE
+        original = path.read_text(encoding="utf-8") if path.exists() else None
+        yield path
+        if original is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(original, encoding="utf-8")
+
+    def test_signature_blocks_upsert_after_model_switch(self, restore_signature, tmp_path):
+        restore_signature.write_text(
+            json.dumps({"model": "BAAI/bge-m3", "dim": 1024}), encoding="utf-8"
+        )
+        with pytest.raises(RuntimeError) as excinfo:
+            vector_store.upsert_chunks(
+                doc_id=999,
+                scope="private",
+                owner_id=1,
+                filename="x.docx",
+                items=[{"chunk_index": 0, "content": "内容", "chunk_type": "text"}],
+                embeddings=[[0.1] * _VEC_DIM],
+            )
+        message = str(excinfo.value)
+        assert "BAAI/bge-m3" in message and "1024" in message
+        assert "data/chroma" in message, "要给出可操作的修复建议"
+
+    def test_query_degrades_when_signature_mismatched(self, restore_signature):
+        restore_signature.write_text(
+            json.dumps({"model": "BAAI/bge-m3", "dim": 1024}), encoding="utf-8"
+        )
+        hits = vector_store.query_similar(collection="public", embedding=[0.1] * _VEC_DIM)
+        assert hits == [], "维度不一致时向量召回应跳过（降级为纯关键词召回）而非报错"
+
+    def test_signature_written_on_first_upsert(self, restore_signature):
+        restore_signature.unlink(missing_ok=True)
+        reason = vector_store.check_embedding_signature(_VEC_DIM)
+        assert reason is None
+        saved = json.loads(restore_signature.read_text(encoding="utf-8"))
+        assert saved["dim"] == _VEC_DIM
+        assert saved["model"] == embedding.active_model_name()
+
+    def test_active_model_name_follows_provider(self, monkeypatch):
+        monkeypatch.setattr(settings, "EMBEDDING_PROVIDER", "local")
+        assert embedding.active_model_name() == settings.EMBEDDING_LOCAL_MODEL
+        monkeypatch.setattr(settings, "EMBEDDING_PROVIDER", "api")
+        assert embedding.active_model_name() == settings.EMBEDDING_MODEL
+
+
+# ============================================================ 五、权限隔离
 
 class TestPermissions:
     """公共库仅教师可写；私有库按用户隔离（三重保障的接口层校验）。"""
@@ -560,7 +617,7 @@ class TestPermissions:
         )
 
 
-# ============================================================ 五、问答（SSE）
+# ============================================================ 六、问答（SSE）
 
 class TestChat:
     """SSE 事件流、引用落库、多轮上下文、错误提示。"""

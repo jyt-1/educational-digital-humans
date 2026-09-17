@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from typing import Any
@@ -18,11 +19,17 @@ import chromadb
 
 from app.config import settings
 from app.models.assistant import SCOPE_PUBLIC
+from app.services import embedding
 
 logger = logging.getLogger(__name__)
 
 # 余弦距离：文本语义相似度场景比默认 L2 更合适
 _COLLECTION_METADATA = {"hnsw:space": "cosine"}
+
+# 记录向量库是用哪个模型建的：换模型/换供应商后维度不同，Chroma 会报晦涩的维度错误，
+# 这里提前挡住并给出「删 data/chroma 重解析」的可操作提示。
+_SIGNATURE_FILE = ".embedding_signature.json"
+_signature_lock = threading.Lock()
 
 _client: chromadb.ClientAPI | None = None
 _client_lock = threading.Lock()
@@ -53,6 +60,45 @@ def get_collection(name: str):
     return get_client().get_or_create_collection(name=name, metadata=_COLLECTION_METADATA)
 
 
+# ------------------------------------------------------------------ 向量库签名
+
+def _read_signature() -> dict[str, Any] | None:
+    path = settings.chroma_dir / _SIGNATURE_FILE
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def check_embedding_signature(dimension: int) -> str | None:
+    """校验向量库与当前 Embedding 配置是否匹配。
+
+    一致返回 None；不一致返回可读的原因说明（调用方决定是抛错还是降级）。
+    """
+    model = embedding.active_model_name()
+    current = {"model": model, "dim": int(dimension)}
+    with _signature_lock:
+        saved = _read_signature()
+        if saved is None:
+            try:
+                (settings.chroma_dir / _SIGNATURE_FILE).write_text(
+                    json.dumps(current, ensure_ascii=False), encoding="utf-8"
+                )
+            except OSError as exc:
+                logger.warning("写入向量库签名失败：%s", exc)
+            return None
+    if saved.get("model") == model and int(saved.get("dim") or 0) == int(dimension):
+        return None
+    return (
+        f"向量库当前由「{saved.get('model')}（{saved.get('dim')} 维）」建立，"
+        f"而当前 Embedding 配置是「{model}（{dimension} 维）」。"
+        "两者不通用，请删除 data/chroma 目录后重新上传/解析文档，"
+        "或把 .env 的 Embedding 配置改回原模型。"
+    )
+
+
 def upsert_chunks(
     *,
     doc_id: int,
@@ -70,6 +116,11 @@ def upsert_chunks(
         return 0
     if len(items) != len(embeddings):
         raise ValueError("向量条数与切块数不一致")
+
+    mismatch = check_embedding_signature(len(embeddings[0]))
+    if mismatch:
+        # 抛给入库流程，最终落到文档的 parse_error 里，用户能直接在页面上看到原因
+        raise RuntimeError(mismatch)
 
     collection = get_collection(collection_name(scope, owner_id))
     ids = [f"{doc_id}:{item['chunk_index']}" for item in items]
@@ -113,6 +164,10 @@ def query_similar(
 ) -> list[dict[str, Any]]:
     """向量召回。返回 [{vector_id, doc_id, chunk_index, chunk_type, page_no, filename, distance}]。"""
     if n_results <= 0:
+        return []
+    mismatch = check_embedding_signature(len(embedding))
+    if mismatch:
+        logger.warning("向量召回已跳过：%s", mismatch)
         return []
     try:
         store = get_collection(collection)

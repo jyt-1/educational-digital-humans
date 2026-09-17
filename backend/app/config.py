@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     EMBEDDING_BASE_URL: str = ""
     EMBEDDING_API_KEY: str = ""
     EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    # 本地兜底模型：与 EMBEDDING_MODEL 分开配置，避免切到 local 时误用云端的大模型
+    # （bge-m3 在无 GPU 机器上加载/推理都很慢，本地一律用 small 级别）
+    EMBEDDING_LOCAL_MODEL: str = "BAAI/bge-small-zh-v1.5"
 
     # ---------- 重排序 ----------
     RERANK_ENABLED: bool = False
