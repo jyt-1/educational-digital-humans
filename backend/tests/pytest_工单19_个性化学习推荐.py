@@ -223,9 +223,54 @@ class TestMatchLabel:
         assert (result.kp_id, result.method) == (1, METHOD_EXACT)
 
     def test_alias_hit(self):
+        """别名档排在词典档**之前**：别名本身也并入了词典，若顺序反了这里会返回 dict。"""
         result = match_label("BP", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
         assert result is not None
         assert (result.kp_id, result.method) == (2, METHOD_ALIAS)
+
+    # ---- ③ 词典档（v1.4 插入，实测把未归类从 47.8% 压到 5.4%）----
+
+    def test_phrase_label_matches_via_dict(self):
+        """老记录（prompt 修正前生成）的标签是**短语**，与节点不是语义距离远、
+        而是形态不同（短语 vs 名词短语），本来就该走词典而不是向量。"""
+        result = match_label(
+            "反向传播的基本原理与适用范围", index=_index(), on_unmatched=ON_UNMATCHED_DROP
+        )
+        assert result is not None
+        assert (result.kp_id, result.method) == (2, METHOD_DICT)
+
+    def test_dict_returns_canonical_node_name(self):
+        """matched_text 回填**节点名**而不是命中的片段。
+        否则「待归并清单」里同一节点的多种短语写法会显示成多个不同知识点。"""
+        result = match_label("神经网络的基本结构", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert (result.kp_id, result.matched_text) == (5, "神经网络")
+        assert result.raw_text == "神经网络的基本结构"  # 原始标签保留，供归并清单回显
+
+    def test_exact_beats_dict(self):
+        """全等档更便宜也更准，能全等就不该退到词典。"""
+        result = match_label("神经网络", index=_index(), on_unmatched=ON_UNMATCHED_DROP)
+        assert (result.kp_id, result.method) == (5, METHOD_EXACT)
+
+    def test_dict_respects_span_claiming(self):
+        """"卷积神经网络的基本原理"只挂「卷积神经网络」，不能连带把「神经网络」也挂上。"""
+        result = match_label(
+            "卷积神经网络的基本原理", index=_index(), on_unmatched=ON_UNMATCHED_DROP
+        )
+        assert result is not None
+        assert (result.kp_id, result.method) == (4, METHOD_DICT)
+
+    def test_compound_node_name_is_a_dead_end(self):
+        """实测教训的回归防线：节点名若写成"梯度消失与梯度爆炸"这种**复合名**，
+        词典扫描反而匹配不上"梯度消失问题""梯度消失的缓解方法"等真实标签
+        （实测少命中 4 道题）。节点名必须用单一概念——故拆成两个节点后应当命中。"""
+        compound = KpIndex(nodes=(KpNode(id=1, name="梯度消失与梯度爆炸"),))
+        split = KpIndex(nodes=(KpNode(id=1, name="梯度消失"),))
+
+        assert match_label("梯度消失问题", index=compound, on_unmatched=ON_UNMATCHED_DROP) is None
+
+        result = match_label("梯度消失问题", index=split, on_unmatched=ON_UNMATCHED_DROP)
+        assert result is not None
+        assert (result.kp_id, result.method) == (1, METHOD_DICT)
 
     def test_unmatched_drops(self):
         assert match_label("量子纠缠", index=_index(), on_unmatched=ON_UNMATCHED_DROP) is None

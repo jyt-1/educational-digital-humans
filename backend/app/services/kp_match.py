@@ -191,7 +191,17 @@ def match_label(
             return MatchResult(raw, node.id, node.name, METHOD_ALIAS, 0.95)
         logger.warning("kp_alias 指向不存在的知识点 %s（norm=%s），已忽略", alias_id, norm)
 
-    # ③ 向量兜底：仅在判据（未归类题目在练习候选集中占比 > 20%）超线后才打开
+    # ③ 词典最长子串扫描——与 match_text 共用同一套词典（v1.4 插入，实测把未归类
+    #    从 47.8% 压到 10.9%）。吃的正是"反向传播的基本原理与适用范围"这类**短语式标签**：
+    #    它们与图谱节点不是语义距离远，而是**形态不同**（短语 vs 名词短语），
+    #    本来就该走词典而不是向量。规则确定性、零 API 成本、结果可解释。
+    hits = scan_dict(norm, index)
+    if hits:
+        kp_id, hit_word, _length = hits[0]  # 最长命中优先
+        node = index.node_by_id().get(kp_id)
+        return MatchResult(raw, kp_id, node.name if node else hit_word, METHOD_DICT, 0.9)
+
+    # ④ 向量兜底：仅在判据（未归类题目在练习候选集中占比 > 20%）超线后才打开
     if use_vector and embed is not None:
         hit = _vector_match(raw, index.nodes, embed)
         if hit is not None:
@@ -220,36 +230,10 @@ def match_text(
     if not norm:
         return _unmatched_list(raw, index, on_unmatched)
 
-    # 词典按归一化键去重，并记下每条键对应的节点；长键优先，保证"神经网络"不被"网络"截胡
-    entries: dict[str, int] = {}
-    for node in index.nodes:
-        if node.is_placeholder:
-            continue
-        key = normalize_label(node.name)
-        if key:
-            entries.setdefault(key, node.id)
-    for alias_norm, kp_id in index.aliases.items():
-        if alias_norm:
-            entries.setdefault(alias_norm, kp_id)
-
-    matched_ids: dict[int, tuple[str, int]] = {}  # kp_id -> (命中词, 长度)
-    claimed: list[tuple[int, int]] = []  # 已被更长的词占用的字符区间
-    for key in sorted(entries, key=len, reverse=True):
-        start = norm.find(key)
-        if start < 0:
-            continue
-        end = start + len(key)
-        # 长词优先：若本次命中完全落在已占用的区间里，说明它只是长词的一部分
-        # （"神经网络"落在"卷积神经网络"里），再挂一次就是误报
-        if any(span_start <= start and end <= span_end for span_start, span_end in claimed):
-            continue
-        claimed.append((start, end))
-        matched_ids.setdefault(entries[key], (key, len(key)))
-
     node_map = index.node_by_id()
     results = [
         MatchResult(raw, kp_id, node_map[kp_id].name if kp_id in node_map else hit_word, METHOD_DICT, 0.9)
-        for kp_id, (hit_word, _length) in matched_ids.items()
+        for kp_id, hit_word, _length in scan_dict(norm, index)
     ]
 
     if results:
@@ -261,6 +245,57 @@ def match_text(
             return [hit]
 
     return _unmatched_list(raw, index, on_unmatched)
+
+
+# ------------------------------------------------------------------ 词典扫描
+
+def build_dict(index: KpIndex) -> dict[str, int]:
+    """合成匹配词典：图谱节点名 ∪ 别名，键为归一化文本。
+
+    节点里带有短别名的（`kp_alias` 存的就是短别名，如 "adam"）能让口语提问
+    "Adam 是啥"直接命中「Adam优化器」——这正是别名表存短别名的意义。
+    占位节点**不进词典**：它只承接兜底，不该被任何标签主动命中。
+    """
+    entries: dict[str, int] = {}
+    for node in index.nodes:
+        if node.is_placeholder:
+            continue
+        key = normalize_label(node.name)
+        if key:
+            entries.setdefault(key, node.id)
+    for alias_norm, kp_id in index.aliases.items():
+        if alias_norm:
+            entries.setdefault(alias_norm, kp_id)
+    return entries
+
+
+def scan_dict(norm_text: str, index: KpIndex) -> list[tuple[int, str, int]]:
+    """在归一化文本里做最长子串扫描，返回 `[(kp_id, 命中词, 词长)]`，长的在前。
+
+    **跨度占位**是关键：长词先扫，短词若完全落在已占用的区间内就跳过——
+    否则"卷积神经网络"会连带把"神经网络"也挂一遍，挂靠结果全是噪声。
+    """
+    entries = build_dict(index)
+    matched: list[tuple[int, str, int]] = []
+    seen: set[int] = set()
+    claimed: list[tuple[int, int]] = []
+
+    for key in sorted(entries, key=len, reverse=True):
+        start = norm_text.find(key)
+        if start < 0:
+            continue
+        end = start + len(key)
+        if any(span_start <= start and end <= span_end for span_start, span_end in claimed):
+            continue
+        claimed.append((start, end))
+
+        kp_id = entries[key]
+        if kp_id in seen:
+            continue
+        seen.add(kp_id)
+        matched.append((kp_id, key, len(key)))
+
+    return matched
 
 
 # ------------------------------------------------------------------ 内部工具
