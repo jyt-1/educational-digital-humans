@@ -31,7 +31,11 @@ export async function speak(text, { voice, signal } = {}) {
     )
     return resp.data
   } catch (error) {
-    throw new Error(readErrorMessage(error))
+    // 把 HTTP 状态带出去：调用方要区分「这句话没内容可念」（400，正常跳过）
+    // 和「服务真的挂了」（503/网络）。前者不该被算作失败。
+    const wrapped = new Error(readErrorMessage(error))
+    wrapped.status = error?.response?.status || 0
+    throw wrapped
   }
 }
 

@@ -88,6 +88,10 @@ export function createSentenceSplitter(onSentence) {
   function emit(raw) {
     const text = (raw || '').trim()
     if (text.length < 2) return
+    // 表格行（`| a | b |`）整行丢弃。后端 to_speakable 也会丢，这里先丢是为了
+    // **省掉一次白跑的请求**——一张表十几行就是十几次 400，纯浪费。
+    // 后端仍是权威，这里只是免去往返。
+    if (text.startsWith("|")) return
     if (!/[一-龥A-Za-z0-9]/.test(text)) return
     onSentence(text)
   }
