@@ -1,4 +1,5 @@
 <!-- [工单18] 人工智能NLP-Agent数字人项目-教育智能体-智能助教任务 —— 智能问答页（带引用流式问答） -->
+<!-- [阶段二] 人工智能NLP-Agent数字人项目-教育智能体-数字人形象层 —— 右侧挂载数字人形象，生成中边生成边朗读 -->
 <template>
   <div class="chat-layout">
     <!-- 会话列表 -->
@@ -99,6 +100,9 @@
         </div>
       </div>
     </section>
+
+    <!-- 数字人形象（阶段二）。生成中朗读，口型由音量驱动 -->
+    <AvatarStage :thinking="streaming" />
   </div>
 </template>
 
@@ -110,7 +114,9 @@ import { Delete, Plus, Promotion } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 
 import { chatStream, deleteConversation, getConversation, listConversations } from '@/api/assistant'
+import AvatarStage from '@/components/AvatarStage.vue'
 import CitationList from '@/components/CitationList.vue'
+import { initAvatar, speech } from '@/store/avatar'
 
 const route = useRoute()
 
@@ -190,6 +196,7 @@ async function loadConversations() {
 }
 
 function startNewChat() {
+  speech.stop() // 清掉上一轮可能还在念的尾句
   conversationId.value = null
   messages.value = []
   input.value = ''
@@ -201,6 +208,7 @@ async function loadConversation(id) {
     return
   }
   const detail = await getConversation(id)
+  speech.stop() // 切会话要把上一会话的声音掐掉，否则会边加载边念
   conversationId.value = detail.id
   messages.value = (detail.messages || []).map((item) => ({
     uid: nextUid(),
@@ -230,6 +238,7 @@ async function handleDeleteConversation(conv) {
 function stopStreaming() {
   controller?.abort()
   streaming.value = false
+  speech.stop()
 }
 
 async function handleSend() {
@@ -249,6 +258,9 @@ async function handleSend() {
   input.value = ''
   streaming.value = true
   controller = new AbortController()
+  // ★ warmup 必须在第一个 await 之前、用户手势的同步栈内调用，否则浏览器按
+  // autoplay 策略挂起 AudioContext，后面一句也念不出来。
+  speech.start()
   await scrollToBottom()
 
   try {
@@ -266,14 +278,17 @@ async function handleSend() {
             answer.citations = data.citations || []
           } else if (event === 'delta') {
             answer.content += data.text || ''
+            speech.feed(data.text || '') // 边生成边念：切句后就地合成，不等整篇写完
             scrollToBottom()
           } else if (event === 'done') {
             if (data.conversation_id) conversationId.value = data.conversation_id
             if (data.content) answer.content = data.content
             answer.citations = data.citations?.length ? data.citations : answer.citations
+            speech.flush() // 把缓冲区里的尾句念完
           } else if (event === 'error') {
             answer.failed = true
             answer.content += `\n\n> ⚠️ ${data.msg || '生成失败'}`
+            speech.stop()
           }
         },
       },
@@ -289,6 +304,9 @@ async function handleSend() {
     streaming.value = false
     answer.streaming = false
     controller = null
+    // ⚠️ 这里**不能**无条件 speech.stop()：流虽然结束了，最后几句往往还在念。
+    // 照搬「finally 里统一清理」的直觉会直接把尾句掐掉。只有失败时才需要停。
+    if (answer.failed) speech.stop()
     await loadConversations()
     scrollToBottom()
   }
@@ -299,6 +317,7 @@ async function handleSend() {
 // 联动助教这条链路就是断的。
 onMounted(async () => {
   await loadConversations()
+  initAvatar() // 不 await：语音配置晚一点到位不影响问答
   const presetConversation = Number(route.query.conversation)
   if (presetConversation) {
     await loadConversation(presetConversation)
@@ -313,6 +332,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   controller?.abort()
+  speech.stop() // 离开页面立刻静音，不留残留声音
 })
 </script>
 
