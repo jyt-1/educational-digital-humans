@@ -13,7 +13,10 @@
     "axios": "^1.7.7",
     "echarts": "^5.5.1",
     "element-plus": "^2.8.4",
+    "live2d-widget-model-shizuku": "^1.0.5",
     "marked": "^14.1.2",
+    "pixi-live2d-display": "^0.4.0",
+    "pixi.js": "^7.4.3",
     "vue": "^3.5.11",
     "vue-router": "^4.4.5"
   },

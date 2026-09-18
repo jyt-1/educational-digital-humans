@@ -67,8 +67,11 @@ class Settings(BaseSettings):
     TTS_CACHE_ENABLED: bool = True
     # 合成结果落盘缓存：重复语句不只是提速，还能在断网时照常播放——演示可靠性靠它
     TTS_CACHE_DIR: str = "./data/tts_cache"
-    # 形象驱动 provider。阶段三接云端数字人 SDK 时改这一项即可，前端业务代码不动
-    AVATAR_PROVIDER: str = "svg-face"
+    # 形象驱动 provider：photo（写实照片 talking-photo）/ live2d（二次元）。
+    # 前端 avatar/provider.js 里未登记的值会回退到 photo 并告警，不会白屏。
+    # 注：阶段三接云端数字人**不是**只改这一项——云端返回视频流而非口型参数，
+    # 还要新增渲染分支、停用本地口型/朗读管线、加起流接口，见讲解文档 6.1 节。
+    AVATAR_PROVIDER: str = "photo"
 
     # ---------- ASR ----------
     WHISPER_MODEL: str = "small"
