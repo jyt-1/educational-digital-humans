@@ -144,8 +144,10 @@ TTS_PROXY=
 # 合成结果落盘缓存：重复语句断网也能播，演示可靠性靠它兜底
 TTS_CACHE_ENABLED=true
 TTS_CACHE_DIR=./data/tts_cache
-# 形象驱动 provider。阶段三换云端数字人 SDK 时只改这一项，前端业务代码不动
-AVATAR_PROVIDER=svg-face
+# 形象驱动 provider：photo=写实照片数字人（talking-photo）；live2d=二次元档。
+# svg-face 卡通脸已于 2026-09-18 退役（用户拍板）。注意：阶段三接云端数字人
+# **不是**只改这一项——云端返回视频流而非口型参数，详见讲解文档 6.1 节
+AVATAR_PROVIDER=photo
 
 # ---------- ASR〔工单20 已移出本期，配置项存档，本期不安装 faster-whisper〕 ----------
 # 将来启用时：无GPU，禁止 medium/large
@@ -263,7 +265,7 @@ UPLOAD_DIR=./uploads
 
 | 接口 | 本地实现 | 开关 |
 | --- | --- | --- |
-| 形象驱动 `frontend/src/avatar/provider.js` | `svg-face`（纯代码内联 SVG，零素材） | `AVATAR_PROVIDER` |
+| 形象驱动 `frontend/src/avatar/provider.js` | `photo`（写实照片 talking-photo）+ `live2d`（二次元档，工单20）；`svg-face` 卡通脸已于 2026-09-18 退役 | `AVATAR_PROVIDER` |
 | TTS `backend/app/services/tts.py` | `edge`（Edge-TTS，纯 CPU、无 Key、需联网 + 落盘缓存） | `TTS_PROVIDER` |
 
 沿用仓库既有的**函数式 provider 范式**（见 `services/embedding.py`）：具名实现 + 字符串开关 + 查找函数 + 未知值回退告警，**不引入 Protocol / ABC / 工厂**。
