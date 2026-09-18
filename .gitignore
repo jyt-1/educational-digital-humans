@@ -18,7 +18,11 @@ venv/
 # Node
 node_modules/
 dist/
+# 编译验证用的临时输出目录（vite 默认清空 dist，被环境护栏拦下，故改输出到新目录）
+dist-verify/
 .vite/
+# vite 构建时的瞬态配置文件（vite.config.js.timestamp-*.mjs）
+*.timestamp-*.mjs
 *.local
 
 # 编辑器 / 系统
@@ -30,3 +34,6 @@ desktop.ini
 # 日志与临时
 *.log
 *.tmp
+
+# WorkBuddy 会话目录（memory 是工作笔记，tmp 是调试截图，都不属于仓库产物）
+.workbuddy/
