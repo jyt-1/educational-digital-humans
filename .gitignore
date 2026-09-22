@@ -34,6 +34,12 @@ desktop.ini
 # 日志与临时
 *.log
 *.tmp
+# 根目录临时产物（非仓库内容）
+tmp/
+
+# 第三方工具与外部依赖（Wav2Lip 为 gitee 镜像克隆，自带 .git，权重 400MB+ 不入库；
+# 实际工作副本在仓库外 C:/Users/23772/sx/wav2lip）
+Wav2Lip/
 
 # WorkBuddy 会话目录（memory 是工作笔记，tmp 是调试截图，都不属于仓库产物）
 .workbuddy/
