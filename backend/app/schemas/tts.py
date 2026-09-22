@@ -15,6 +15,14 @@ class SpeakRequest(BaseModel):
 
     text: str = Field(..., min_length=1, max_length=2000, description="待朗读文本（可含 Markdown）")
     voice: str | None = Field(None, description="音色，缺省用 .env 里的 TTS_VOICE")
+    # 形象级音色风格（如小满的萌音：rate=+8%、pitch=+30Hz）。
+    # 格式白名单：edge-tts 要求 [+-]数字% 或 [+-]数字Hz；不限制的话用户可注入任意 prosody 串。
+    rate: str | None = Field(
+        None, pattern=r"^[+-]\d{1,3}%$", description="语速（如 +8%），缺省用 .env 的 TTS_RATE"
+    )
+    pitch: str | None = Field(
+        None, pattern=r"^[+-]\d{1,3}Hz$", description="音调（如 +30Hz），缺省不调整"
+    )
 
 
 class TtsConfigOut(BaseModel):

@@ -30,6 +30,7 @@ const RELEASE = 0.15
  *   setEnabled: (v: boolean) => void,
  *   isEnabled: () => boolean,
  *   setVoice: (v: string) => void,
+ *   setTuning: (t: {rate?: string, pitch?: string}) => void,
  *   start: () => void,
  *   feed: (delta: string) => void,
  *   flush: () => void,
@@ -48,6 +49,8 @@ export function createSpeechQueue() {
   // ---- 播放状态 ----
   let enabled = true
   let voice = ''
+  // 形象级音色风格（如小满的萌音）。空对象 = 用后端默认（.env 的 TTS_RATE + 不加音调）
+  let tuning = { rate: '', pitch: '' }
   let volume = 0
   let speaking = false
   let stateCb = null
@@ -149,7 +152,12 @@ export function createSpeechQueue() {
     // ctx 为空说明 warmup() 没成功（非用户手势栈内调用，或浏览器不支持）
     if (!ctx) return Promise.resolve(null)
     if (!item.promise) {
-      item.promise = speak(item.text, { voice: voice || undefined, signal: controller?.signal })
+      item.promise = speak(item.text, {
+        voice: voice || undefined,
+        rate: tuning.rate || undefined,
+        pitch: tuning.pitch || undefined,
+        signal: controller?.signal,
+      })
         .then((raw) => (raw?.byteLength ? ctx.decodeAudioData(raw) : null))
         .then((decoded) => {
           failing = 0
@@ -287,6 +295,10 @@ export function createSpeechQueue() {
     isEnabled: () => enabled,
     setVoice: (v) => {
       voice = v || ''
+    },
+    /** 形象级音色风格：只影响之后新入队的句子（已在播的不受影响）。 */
+    setTuning: ({ rate, pitch } = {}) => {
+      tuning = { rate: rate || '', pitch: pitch || '' }
     },
     setEnabled: (v) => {
       enabled = Boolean(v)

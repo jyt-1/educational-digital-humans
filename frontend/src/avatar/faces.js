@@ -12,6 +12,11 @@
 //   与 avatar/provider.js 的 provider.render **同一套词汇**，由 pickRender(face, provider)
 //   统一判定用哪个渲染组件（素材决定一张脸只能怎么画，故以形象自带值为准）。
 // defaultVoice: 切换形象时自动配对的 edge-tts 音色（用户手动改音色仍可覆盖）。
+// greeting: 问答页空会话时数字人自己说的开场白（纯前端展示，不入库、不消耗 LLM）。
+//   与后端 avatar_persona.py 的人设同源同调——开场白决定第一印象，人设决定后续语气。
+//   注意每句都点出「带哪类课」，否则用户不知道这个形象擅长什么。
+// voiceStyle: 可选的音色风格（rate 语速 / pitch 音调），随形象自动应用，用于塑造「萌音」等嗓音调性。
+//   Edge-TTS 中文无儿童音色，故萌系只能靠 prosody 参数；后端正则校验格式 [+-]数字(%|Hz)。
 
 import photoTeacher from '@/assets/avatar/photo-teacher.png'
 import fYoungBlue from '@/assets/avatar/f-young-blue.png'
@@ -29,6 +34,7 @@ export const FACES = [
     img: photoTeacher,
     defaultVoice: 'zh-CN-XiaoxiaoNeural',
     desc: '温和知性 · 语文/通识',
+    greeting: '我是晓雯，带语文和通识课。有什么想聊的，或者想让我帮你讲讲课文？',
     geometry: {
       cropBottom: 0.94,
       mouth: { cx: 0.507, cy: 0.48, maxRx: 0.05, maxRy: 0.028 },
@@ -48,6 +54,7 @@ export const FACES = [
     img: fYoungBlue,
     defaultVoice: 'zh-CN-XiaoxiaoNeural',
     desc: '青年干练 · 数学和科学',
+    greeting: '我是苏青。数学和科学的问题交给我，咱们一条条捋清楚。',
     geometry: {
       cropBottom: 0.96,
       mouth: { cx: 0.5189, cy: 0.4807, maxRx: 0.0412, maxRy: 0.0259 },
@@ -67,6 +74,7 @@ export const FACES = [
     img: fSeniorBurgundy,
     defaultVoice: 'zh-CN-XiaoxiaoNeural',
     desc: '资深沉稳 · 学科带头人',
+    greeting: '我是周慧。有想不通的地方尽管问，我们一起把问题往深处走一层。',
     geometry: {
       cropBottom: 0.96,
       mouth: { cx: 0.5104, cy: 0.5432, maxRx: 0.0454, maxRy: 0.0286 },
@@ -86,6 +94,7 @@ export const FACES = [
     img: fLivelyPonytail,
     defaultVoice: 'zh-CN-XiaoyiNeural',
     desc: '活泼元气 · 低年级课堂',
+    greeting: '嗨，我是林悦！有什么不懂的，咱们用故事讲明白～',
     geometry: {
       cropBottom: 0.96,
       mouth: { cx: 0.5221, cy: 0.4934, maxRx: 0.0403, maxRy: 0.0254 },
@@ -105,6 +114,7 @@ export const FACES = [
     img: mYoungNavy,
     defaultVoice: 'zh-CN-YunxiNeural',
     desc: '青年阳光 · 信息/编程',
+    greeting: '我是陈远，写代码的那种老师。有什么问题直接抛过来，咱们跑一遍看看。',
     geometry: {
       cropBottom: 0.96,
       mouth: { cx: 0.5072, cy: 0.5237, maxRx: 0.0466, maxRy: 0.0293 },
@@ -124,6 +134,7 @@ export const FACES = [
     img: mSeniorTweed,
     defaultVoice: 'zh-CN-YunjianNeural',
     desc: '儒雅博学 · 奥赛/进阶',
+    greeting: '在下吴谦。学问之道贵在追问，说说你卡在哪儿了？',
     geometry: {
       cropBottom: 0.96,
       mouth: { cx: 0.5091, cy: 0.4539, maxRx: 0.0381, maxRy: 0.024 },
@@ -142,7 +153,12 @@ export const FACES = [
     render: 'live2d',
     model: '/live2d/shizuku/shizuku.model.json',
     defaultVoice: 'zh-CN-XiaoyiNeural',
+    // 萌音：Edge-TTS 中文音色里没有儿童/萌系嗓音（只有晓晓/晓伊/东北/陕西四个女声），
+    // 所以「萌」靠 prosody 参数做——音调 +30Hz（女声基频约升 15%）+ 语速 +8%。
+    // 这是纯 SSML 参数、不换引擎，实时与离线两条 TTS 链路都支持。
+    voiceStyle: { rate: '+8%', pitch: '+30Hz' },
     desc: 'Live2D 档 · 活泼课堂',
+    greeting: '我是小满呀！咱们一起把难题拆开看看，好不好嘛～',
   },
 ]
 

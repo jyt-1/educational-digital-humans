@@ -104,7 +104,7 @@
       </div>
       <div class="set-row">
         <span class="set-label">音色</span>
-        <el-select v-model="voiceModel" size="small" style="width: 260px" :disabled="!avatarState.available">
+        <el-select v-model="voiceModel" size="small" style="width: 240px" :disabled="!avatarState.available">
           <el-option
             v-for="item in avatarState.voices"
             :key="item.short_name"
@@ -112,6 +112,21 @@
             :value="item.short_name"
           />
         </el-select>
+        <!-- 试听：不换形象也能立刻听到「这个音色 + 这个形象的嗓音调性」是什么效果。
+             萌音这类 prosody 参数光看标签体会不到，必须给个出声的入口。 -->
+        <el-button
+          size="small"
+          :icon="VideoPlay"
+          :disabled="!avatarState.available"
+          title="用当前音色试听一句话"
+          @click="previewVoice"
+        >
+          试听
+        </el-button>
+        <!-- 音色风格随形象自动应用（如小满的萌音）；这里显性标注，否则用户不知道为何听感不同 -->
+        <el-tag v-if="voiceStyleLabel" size="small" type="warning" effect="light">
+          {{ voiceStyleLabel }}
+        </el-tag>
       </div>
       <template #footer>
         <el-button @click="settingsOpen = false">完成</el-button>
@@ -122,6 +137,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { VideoPlay } from '@element-plus/icons-vue'
 
 import { FACES } from '@/avatar/faces'
 import { pickRender } from '@/avatar/provider'
@@ -147,6 +163,16 @@ const voiceModel = computed({
   set: (v) => setVoice(v),
 })
 
+/** 形象自带的音色风格标注（小满的萌音：音调 +30Hz、语速 +8%）。 */
+const voiceStyleLabel = computed(() => {
+  const s = face.value?.voiceStyle
+  if (!s) return ''
+  const parts = []
+  if (s.pitch) parts.push(`音调 ${s.pitch}`)
+  if (s.rate) parts.push(`语速 ${s.rate}`)
+  return parts.length ? `萌音·${parts.join(' / ')}` : ''
+})
+
 const statusText = computed(() => {
   if (props.listening) return '倾听中'
   if (avatarState.speaking) return '回复中'
@@ -167,6 +193,28 @@ function toggleSpeech() {
 
 function chooseFace(id) {
   setFace(id)
+}
+
+/** 试听文本：带上形象名字，顺带验证「形象 ↔ 声音」配对是否对得上（女脸不该出男声）。 */
+const previewText = computed(
+  () => `同学们好呀，我是${face.value?.name || '你们的老师'}，今天我们一起把这个知识点弄明白。`,
+)
+
+/**
+ * 用当前音色 + 当前形象的嗓音调性（如小满的萌音）+ 试听一句话。
+ *
+ * ⚠️ `speech.start()` 必须在用户点击的**同步栈**里调用（它负责建 AudioContext 并
+ * resume）——放进 await/Promise 之后就会脱离手势栈，浏览器按 autoplay 策略挂起，
+ * 点了没声。这与问答页 warmup 的红线是同一条。
+ */
+function previewVoice() {
+  if (!avatarState.available) return
+  // 静音状态下点试听：顺手把朗读打开，否则用户点了半天没动静只会以为是坏的
+  if (!avatarState.enabled) setSpeechEnabled(true)
+  speech.stop()
+  speech.start()
+  speech.feed(previewText.value)
+  speech.flush()
 }
 
 // ---------------------------------------------------------------- 声波可视化

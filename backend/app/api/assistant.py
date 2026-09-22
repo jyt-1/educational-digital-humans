@@ -7,6 +7,12 @@
     done    → {"conversation_id": 1, "message_id": 9, "title": "..."}
     error   → {"msg": "错误原因"}
 
+两条分支（[工单22] 追加）：
+- **知识问答**：检索 → 依据资料作答、每处标 [n] 角标（citations 非空）；
+- **闲聊/自我介绍**：识别为寒暄或身份/能力询问时**跳过检索**，按请求里的
+  ``avatar_id`` 取数字人人设自然应答（citations 为空，前端不显示引用）。
+  判定规则见 services/avatar_persona.py。
+
 会话与消息按 user_id 隔离，任何越权访问都返回 404/403（设计文档 5.1 节）。
 """
 
@@ -35,7 +41,7 @@ from app.schemas.assistant import (
 )
 from app.schemas.common import ApiResponse
 from app.services import assistant as assistant_service
-from app.services import embedding, llm_client, rerank, retriever
+from app.services import avatar_persona, embedding, llm_client, rerank, retriever
 
 logger = logging.getLogger(__name__)
 
@@ -82,22 +88,28 @@ async def chat(
         )
         history = [{"role": m.role, "content": m.content} for m in reversed(rows)]
 
-    # 检索在流式开始前完成：前端可先渲染引用来源，再逐字接收答案
-    try:
-        hits = await retriever.search(
-            db,
-            question=payload.question,
-            user=user,
-            top_k=payload.top_k,
-            scope=payload.scope,
-            use_rerank=payload.use_rerank,
-        )
-    except embedding.EmbeddingNotConfiguredError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    # 闲聊（寒暄 / 自我介绍 / 能力询问）不检索：省一次检索开销，也避免拿一屏
+    # 「知识库中未找到依据」去回答一句「你好」。判定见 services/avatar_persona.py。
+    smalltalk = avatar_persona.is_smalltalk(payload.question)
+    hits: list[retriever.Hit] = []
+    if not smalltalk:
+        # 检索在流式开始前完成：前端可先渲染引用来源，再逐字接收答案
+        try:
+            hits = await retriever.search(
+                db,
+                question=payload.question,
+                user=user,
+                top_k=payload.top_k,
+                scope=payload.scope,
+                use_rerank=payload.use_rerank,
+            )
+        except embedding.EmbeddingNotConfiguredError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     citations = [CitationOut(**hit.to_citation(i)) for i, hit in enumerate(hits, start=1)]
     question = payload.question
     user_id = user.id
+    avatar_id = payload.avatar_id
 
     async def event_stream() -> AsyncIterator[str]:
         yield _sse(
@@ -113,7 +125,9 @@ async def chat(
 
         chunks: list[str] = []
         try:
-            async for delta in assistant_service.stream_answer(question, hits, history):
+            async for delta in assistant_service.stream_answer(
+                question, hits, history, avatar_id=avatar_id, smalltalk=smalltalk
+            ):
                 chunks.append(delta)
                 yield _sse("delta", {"text": delta})
         except llm_client.LLMNotConfiguredError as exc:

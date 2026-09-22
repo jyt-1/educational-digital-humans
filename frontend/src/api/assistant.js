@@ -6,7 +6,10 @@ import { streamPost } from '@/api/sse'
  * 流式问答。
  * 事件序列：sources（引用来源，先于答案下发）→ delta（逐字增量）→ done / error
  *
- * @param {object} payload { question, conversation_id?, scope?, top_k?, use_rerank? }
+ * `avatar_id` 是当前数字人形象 id：后端据此决定语气人设；闲聊类提问（自我介绍、
+ * 寒暄）会跳过检索、按该形象的身份作答（此时 sources 里的 citations 为空）。
+ *
+ * @param {object} payload { question, conversation_id?, scope?, top_k?, use_rerank?, avatar_id? }
  * @param {(event: string, data: any) => void} onEvent
  * @param {AbortSignal} signal 中断当前回答
  */

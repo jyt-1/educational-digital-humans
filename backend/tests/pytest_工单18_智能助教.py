@@ -29,7 +29,7 @@ from pptx.util import Inches
 from app.config import settings
 from app.models.assistant import PARSE_DONE, PARSE_FAILED
 from app.services import assistant as assistant_service
-from app.services import embedding, llm_client, retriever, vector_store
+from app.services import avatar_persona, embedding, llm_client, retriever, vector_store
 from app.services.chunking import chunk_blocks
 from app.services.parsers import detect_file_type, parse_document
 from app.services.parsers.base import ParsedBlock, looks_formula
@@ -848,3 +848,151 @@ class TestRagPrompt:
     def test_make_title_truncates(self):
         assert assistant_service.make_title("短问题") == "短问题"
         assert len(assistant_service.make_title("很长的问" * 20)) <= 24
+
+
+# ============================================================ [工单22] 人设与闲聊
+
+
+def _parse_sse_events(text: str) -> list[tuple[str, dict]]:
+    """解析 SSE 文本为 (事件名, 数据) 列表（模块级，供闲聊用例复用）。"""
+    events: list[tuple[str, dict]] = []
+    for block in text.strip().split("\n\n"):
+        name, payload = None, None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[7:].strip()
+            elif line.startswith("data: "):
+                payload = json.loads(line[6:])
+        if name:
+            events.append((name, payload or {}))
+    return events
+
+
+class TestAvatarPersonaAndSmalltalk:
+    """[工单22] 数字人人设 + 闲聊分支：自我介绍不该回「知识库中未找到依据」。"""
+
+    ANSWER = "我是小满呀，我可以帮你查资料、讲知识点、出题。"
+
+    @pytest.fixture
+    def mock_chat_stream(self, monkeypatch):
+        captured: dict = {}
+
+        async def _stream(messages, **kwargs):
+            captured["messages"] = messages
+            yield self.ANSWER
+
+        monkeypatch.setattr(llm_client, "chat_stream", _stream)
+        return captured
+
+    # ---------------- 意图识别
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "你好",
+            "您好！",
+            "在吗？",
+            "hello",
+            "谢谢你",
+            "你是谁",
+            "你叫什么名字？",
+            "介绍一下你自己",
+            "介绍下你自己吧",
+            "你会什么",
+            "你能做什么",
+            "你擅长哪些",
+            "你是真人吗",
+            "你是男的女的",
+        ],
+    )
+    def test_smalltalk_questions_are_detected(self, question):
+        assert avatar_persona.is_smalltalk(question) is True
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "你好，什么是梯度下降？",  # 寒暄 + 知识问题：按知识问答处理
+            "介绍一下反向传播的完整流程",  # 说的是「介绍」但对象是知识点
+            "做一份自我介绍的课件",  # 要的是教学材料，不能当闲聊答
+            "梯度下降的学习率过大会有什么后果？",
+            "表格里 Adam 优化器适合什么场景？",
+            "帮我总结反向传播的完整流程",
+            "",
+        ],
+    )
+    def test_knowledge_questions_are_not_smalltalk(self, question):
+        assert avatar_persona.is_smalltalk(question) is False
+
+    # ---------------- 提示词
+
+    def test_smalltalk_prompt_carries_persona_without_retrieval_talk(self):
+        messages = assistant_service.build_rag_messages(
+            "介绍一下你自己", [], avatar_id="shizuku", smalltalk=True
+        )
+        system = messages[0]["content"]
+        assert "小满" in system, "闲聊应答必须带上当前形象的身份"
+        assert "未在知识库中找到依据" not in system, "闲聊不该出现检索话术"
+        assert "【资料】" not in "".join(m["content"] for m in messages)
+        assert messages[-1] == {"role": "user", "content": "介绍一下你自己"}
+
+    def test_persona_differs_per_avatar(self):
+        first = assistant_service.build_rag_messages(
+            "介绍一下你自己", [], avatar_id="xiaowen", smalltalk=True
+        )[0]["content"]
+        second = assistant_service.build_rag_messages(
+            "介绍一下你自己", [], avatar_id="chenyuan", smalltalk=True
+        )[0]["content"]
+        assert "晓雯" in first and "陈远" not in first
+        assert "陈远" in second and "晓雯" not in second
+        assert first != second
+
+    def test_qa_prompt_keeps_fabrication_guard_with_persona(self):
+        messages = assistant_service.build_rag_messages(
+            "梯度下降是什么", [], avatar_id="wuqian"
+        )
+        system = messages[0]["content"]
+        assert "吴谦" in system
+        assert "未在知识库中找到依据" in system, "常规问答的幻觉控制条款不能被削弱"
+
+    def test_unknown_avatar_falls_back_to_generic_persona(self):
+        system = assistant_service.build_rag_messages(
+            "介绍一下你自己", [], avatar_id="not-a-real-face", smalltalk=True
+        )[0]["content"]
+        assert "智能助教" in system
+
+    # ---------------- 接口链路
+
+    def test_chat_smalltalk_skips_retrieval(self, client, auth, student_token, mock_chat_stream, monkeypatch):
+        calls: list[dict] = []
+
+        async def _search(db, **kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr(retriever, "search", _search)
+        resp = client.post(
+            "/api/assistant/chat",
+            json={"question": "介绍一下你自己", "avatar_id": "shizuku"},
+            headers=auth(student_token),
+        )
+        events = _parse_sse_events(resp.text)
+        assert events[0][0] == "sources"
+        assert events[0][1]["citations"] == []
+        assert calls == [], "闲聊必须跳过检索（省开销，也避免用检索话术答非所问）"
+        assert "小满" in mock_chat_stream["messages"][0]["content"]
+
+    def test_chat_knowledge_question_still_retrieves(self, client, auth, student_token, mock_chat_stream, monkeypatch):
+        calls: list[dict] = []
+
+        async def _search(db, **kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr(retriever, "search", _search)
+        client.post(
+            "/api/assistant/chat",
+            json={"question": "梯度下降的学习率过大会有什么后果？", "avatar_id": "xiaowen"},
+            headers=auth(student_token),
+        )
+        assert len(calls) == 1, "知识问题仍要走检索"
+        assert "晓雯" in mock_chat_stream["messages"][0]["content"]

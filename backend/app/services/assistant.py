@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
-from app.services import llm_client
+from app.services import avatar_persona, llm_client
 from app.services.retriever import Hit
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,19 @@ _SYSTEM_NO_CONTEXT = """你是「智能助教」，服务于高职院校与 K12 
 4. 严禁假装引用知识库内容，严禁编造文件名或页码。
 用简体中文作答。"""
 
+# 闲聊/自我介绍专用：**不检索、不要求引用**，只按形象人设自然回应。
+# 没有它的时候，用户问一句"介绍一下你自己"，数字人会回一屏"知识库中未找到依据"。
+_SYSTEM_CHITCHAT = """{persona}
+
+用户这次说的是**寒暄、自我介绍或能力询问**这类闲聊，本次**没有检索知识库**，也不要假装检索过。
+
+请按你的身份自然回应：
+1. 自我介绍时用一两句口语化的话讲清「你是谁、带哪类课、有什么脾气」，**语气必须符合上面的人设**，不要像念简历；
+2. 顺带说说你能帮上什么忙（基于知识库的答疑与讲解、答案带引用溯源、按知识点出题备课、把教案课件做成讲课视频），**只提真实具备的能力**，不要编造；
+3. 称呼对方为「同学」，不要称呼「用户」；
+4. 不要出现「知识库中未找到依据」「建议上传资料」这类检索话术，也不要标 [n] 角标；
+5. 2~4 句为宜，不要过度卖萌；用简体中文作答。"""
+
 
 def build_context_block(hits: list[Hit]) -> str:
     """把命中的资料拼成带编号的上下文块。编号即前端引用角标。"""
@@ -60,11 +73,31 @@ def build_rag_messages(
     question: str,
     hits: list[Hit],
     history: list[dict] | None = None,
+    *,
+    avatar_id: str | None = None,
+    smalltalk: bool = False,
 ) -> list[dict]:
-    """构造 RAG 对话消息。``history`` 为之前的多轮消息（role/content）。"""
+    """构造 RAG 对话消息。``history`` 为之前的多轮消息（role/content）。
+
+    ``avatar_id`` 决定数字人人设（见 avatar_persona.py）：常规问答只注入语气，
+    闲聊分支（``smalltalk=True``）则整套换成人设应答。闲聊分支不要求引用，
+    传进来的 ``hits`` 应为空——调用方（api/assistant.py）已按此跳过检索。
+    """
+    persona = avatar_persona.persona_line(avatar_id)
+    if smalltalk:
+        messages: list[dict] = [{"role": "system", "content": _SYSTEM_CHITCHAT.format(persona=persona)}]
+        for item in history or []:
+            role = item.get("role")
+            content = (item.get("content") or "").strip()
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": question})
+        return messages
+
     context = build_context_block(hits)
-    system = _SYSTEM_WITH_CONTEXT if context else _SYSTEM_NO_CONTEXT
-    messages: list[dict] = [{"role": "system", "content": system}]
+    base = _SYSTEM_WITH_CONTEXT if context else _SYSTEM_NO_CONTEXT
+    system = f"{persona}\n\n{base}"
+    messages = [{"role": "system", "content": system}]
 
     for item in history or []:
         role = item.get("role")
@@ -84,9 +117,14 @@ async def stream_answer(
     question: str,
     hits: list[Hit],
     history: list[dict] | None = None,
+    *,
+    avatar_id: str | None = None,
+    smalltalk: bool = False,
 ) -> AsyncIterator[str]:
     """流式产出答案增量（供 SSE 推送）。"""
-    messages = build_rag_messages(question, hits, history)
+    messages = build_rag_messages(
+        question, hits, history, avatar_id=avatar_id, smalltalk=smalltalk
+    )
     async for delta in llm_client.chat_stream(messages, temperature=0.3):
         yield delta
 

@@ -24,14 +24,15 @@ FAKE_AUDIO = b"ID3fake-mp3-bytes"
 
 @pytest.fixture
 def fake_edge(monkeypatch):
-    """把本地合成实现换成假实现，并返回调用计数器。
+    """把本地合成实现换成假实现，并返回调用记录。
 
     `synthesize()` 调用的是模块级 `_synthesize_edge`，所以打模块属性即可生效。
+    记录保持 (text, voice, rate, pitch) 四元组——**前两位是既有断言在用的位置**，不要调换。
     """
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, str, str]] = []
 
-    async def _fake(text: str, voice: str) -> bytes:
-        calls.append((text, voice))
+    async def _fake(text: str, voice: str, rate: str = "", pitch: str = "") -> bytes:
+        calls.append((text, voice, rate, pitch))
         return FAKE_AUDIO
 
     monkeypatch.setattr(tts, "_synthesize_edge", _fake)
@@ -186,6 +187,50 @@ async def test_cache_disabled_always_synthesizes(monkeypatch, tts_on, fake_edge)
     assert len(fake_edge) == 2
 
 
+# ---------------------------------------------------------------- 4.5 形象音色风格（rate/pitch）
+
+async def test_synthesize_passes_voice_style(tts_on, fake_edge) -> None:
+    """形象级音色风格要原样透传到合成实现（小满的萌音靠它生效）。"""
+    await tts.synthesize("萌音用例：这句应当带音调提升。", rate="+8%", pitch="+30Hz")
+    assert fake_edge[0][2:] == ("+8%", "+30Hz")
+
+
+async def test_synthesize_defaults_to_env_rate_without_pitch(tts_on, fake_edge) -> None:
+    """不传风格时回落 .env 的 TTS_RATE，且音调为空——空串进 SSML 会让服务端断流。"""
+    await tts.synthesize("默认风格用例：不传 rate/pitch。")
+    text, _voice, rate, pitch = fake_edge[0]
+    assert rate == settings.TTS_RATE
+    assert pitch == ""
+
+
+async def test_cache_key_varies_by_pitch(tts_on, fake_edge) -> None:
+    """同一句话换音调必须重新合成（否则小满会念出晓雯的调）。"""
+    text = "音调缓存用例：同文本、不同 pitch 不应命中同一份缓存。"
+    await tts.synthesize(text, pitch="+30Hz")
+    await tts.synthesize(text, pitch="+0Hz")
+    assert len(fake_edge) == 2
+
+
+def test_speak_rejects_malformed_pitch(client: TestClient, teacher_token, auth, tts_on) -> None:
+    """pitch/rate 走白名单正则——防注入非法 prosody 串。"""
+    resp = client.post(
+        "/api/tts/speak",
+        json={"text": "你好", "pitch": "'; drop--"},
+        headers=auth(teacher_token),
+    )
+    assert resp.status_code == 422
+
+
+def test_speak_forwards_voice_style(client: TestClient, teacher_token, auth, tts_on, fake_edge) -> None:
+    resp = client.post(
+        "/api/tts/speak",
+        json={"text": "接口透传用例", "voice": "zh-CN-XiaoyiNeural", "rate": "+8%", "pitch": "+30Hz"},
+        headers=auth(teacher_token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert fake_edge[0][1:] == ("zh-CN-XiaoyiNeural", "+8%", "+30Hz")
+
+
 # ---------------------------------------------------------------- 5. 音色清单
 
 def test_available_voices_is_static_and_complete() -> None:
@@ -295,7 +340,7 @@ def test_speak_blank_text_returns_422(client: TestClient, teacher_token, auth, t
 
 
 def test_speak_unavailable_returns_503(client: TestClient, teacher_token, auth, monkeypatch, tts_on) -> None:
-    async def _boom(text: str, voice: str) -> bytes:
+    async def _boom(text: str, voice: str, rate: str = "", pitch: str = "") -> bytes:
         raise tts.TTSUnavailableError("语音合成服务暂时不可用，请检查网络连接（Edge-TTS 需要联网）。")
 
     monkeypatch.setattr(tts, "_synthesize_edge", _boom)

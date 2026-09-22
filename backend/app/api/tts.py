@@ -54,7 +54,9 @@ def list_voices(user: User = Depends(get_current_user)) -> ApiResponse[list[Voic
 @router.post("/speak", summary="文本转语音（返回 MP3 字节流）")
 async def speak(payload: SpeakRequest, user: User = Depends(get_current_user)) -> Response:
     try:
-        audio = await tts.synthesize(payload.text, voice=payload.voice)
+        audio = await tts.synthesize(
+            payload.text, voice=payload.voice, rate=payload.rate, pitch=payload.pitch
+        )
     except tts.TTSEmptyTextError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except tts.TTSNotConfiguredError as exc:

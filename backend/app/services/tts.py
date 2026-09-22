@@ -171,9 +171,12 @@ def _truncate(text: str) -> str:
     return head
 
 
-def _cache_key(text: str, voice: str) -> str:
-    """缓存键：把影响音频的所有参数一起哈希，换音色/语速不会串音。"""
-    raw = f"{settings.TTS_PROVIDER}|{voice}|{settings.TTS_RATE}|{settings.TTS_VOLUME}|{text}"
+def _cache_key(text: str, voice: str, rate: str = "", pitch: str = "") -> str:
+    """缓存键：把影响音频的所有参数一起哈希，换音色/语速/音调不会串音。"""
+    raw = (
+        f"{settings.TTS_PROVIDER}|{voice}|{rate or settings.TTS_RATE}|"
+        f"{pitch}|{settings.TTS_VOLUME}|{text}"
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -194,8 +197,17 @@ def _prune_cache() -> None:
         logger.warning("TTS 缓存清理失败：%s", exc)
 
 
-async def synthesize(text: str, *, voice: str | None = None) -> bytes:
+async def synthesize(
+    text: str,
+    *,
+    voice: str | None = None,
+    rate: str | None = None,
+    pitch: str | None = None,
+) -> bytes:
     """把一段文本合成为 MP3 字节。文本会先做 Markdown 清洗。
+
+    rate / pitch 为形象级音色风格（如小满的「萌音」= 语速 +8%、音调 +30Hz）：
+    缺省走 .env 的 TTS_RATE、不加音调。两者进缓存键，同一句话不同风格不会互相串音。
 
     并发说明：本机不做服务端限流——前端按句串行播放、最多预取一句，
     同一时刻在途请求不超过 2 个（见 frontend/src/audio/speechQueue.js）。
@@ -214,7 +226,9 @@ async def synthesize(text: str, *, voice: str | None = None) -> bytes:
         raise TTSEmptyTextError("这段话没有可朗读的内容（可能只含代码块、表格或标点）。")
 
     actual_voice = voice or settings.TTS_VOICE
-    cache_path = _cache_path(_cache_key(speakable, actual_voice))
+    actual_rate = rate or settings.TTS_RATE
+    actual_pitch = pitch or ""
+    cache_path = _cache_path(_cache_key(speakable, actual_voice, actual_rate, actual_pitch))
 
     if settings.TTS_CACHE_ENABLED and cache_path.exists():
         try:
@@ -226,7 +240,7 @@ async def synthesize(text: str, *, voice: str | None = None) -> bytes:
             logger.warning("TTS 缓存读取失败，改为重新合成：%s", exc)
 
     if settings.TTS_PROVIDER.lower() == "edge":
-        audio = await _synthesize_edge(speakable, actual_voice)
+        audio = await _synthesize_edge(speakable, actual_voice, actual_rate, actual_pitch)
     else:  # pragma: no cover - 上面的 _PROVIDERS 校验已挡住
         raise TTSNotConfiguredError(f"provider {settings.TTS_PROVIDER} 没有对应实现。")
 
@@ -239,9 +253,10 @@ async def synthesize(text: str, *, voice: str | None = None) -> bytes:
     return audio
 
 
-async def _synthesize_edge(text: str, voice: str) -> bytes:
+async def _synthesize_edge(text: str, voice: str, rate: str = "", pitch: str = "") -> bytes:
     """本地实现：Edge-TTS（微软免费服务，纯 CPU，无需 Key，**需要联网**）。
 
+    pitch 为空串时**不传该参数**：edge-tts 对空串会拼出非法 prosody 属性，服务端直接断流。
     这里**惰性导入** edge_tts：未安装时应用照常启动，只在真正调用时报可读错，
     与 llm_client.py「没有 Key 不影响启动」的既有约定一致。
     """
@@ -256,8 +271,9 @@ async def _synthesize_edge(text: str, voice: str) -> bytes:
     communicate = edge_tts.Communicate(
         text,
         voice,
-        rate=settings.TTS_RATE,
+        rate=rate or settings.TTS_RATE,
         volume=settings.TTS_VOLUME,
+        **({"pitch": pitch} if pitch else {}),
         # 超时下推到库：它自己管 connect/receive 两级，比外层包一层粗暴的 asyncio.timeout 精确。
         # proxy 必须传 None 而非空串——库内会校验 isinstance(proxy, str)，空串能过校验却是个坏代理。
         connect_timeout=10,

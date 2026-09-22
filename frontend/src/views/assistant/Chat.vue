@@ -32,7 +32,17 @@
 
       <div ref="scrollRef" class="side-thread">
         <div v-if="!messages.length" class="thread-welcome">
-          <p>向数字人老师提问，答案会同步朗读并附引用来源。</p>
+          <!-- 空会话先由数字人自己开口（开场白随形象变化），比一句系统说明更像「有个老师在」 -->
+          <div class="thread-welcome-face">
+            <span class="thread-welcome-name">{{ avatarState.face?.name }}</span>
+            <span class="thread-welcome-desc">{{ avatarState.face?.desc }}</span>
+          </div>
+          <p class="thread-welcome-say">
+            {{ avatarState.face?.greeting || '向数字人老师提问，答案会同步朗读并附引用来源。' }}
+          </p>
+          <p class="thread-welcome-hint">
+            试试点下面任意一条，或直接输入问题（右上角「形象设置」可换人，换人后话术与声音都会变）
+          </p>
           <div class="thread-samples">
             <el-tag
               v-for="sample in samples"
@@ -162,7 +172,7 @@ import { chatStream, deleteConversation, getConversation, listConversations } fr
 import { createAsr, isAsrSupported } from '@/audio/asr'
 import AvatarSpotlight from '@/components/AvatarSpotlight.vue'
 import CitationList from '@/components/CitationList.vue'
-import { initAvatar, speech } from '@/store/avatar'
+import { initAvatar, avatarState, speech } from '@/store/avatar'
 
 const route = useRoute()
 
@@ -176,6 +186,9 @@ const streaming = ref(false)
 const scrollRef = ref(null)
 
 const samples = [
+  // 闲聊/自我介绍排在最前：这是最好验证「数字人是谁」的一问，答案不走知识库
+  '介绍一下你自己',
+  '你都会些什么呀？',
   '梯度下降的学习率过大会有什么后果？',
   '表格里 Adam 优化器适合什么场景？',
   '帮我总结反向传播的完整流程',
@@ -333,6 +346,9 @@ async function handleSend() {
         conversation_id: conversationId.value,
         scope: scope.value,
         use_rerank: rerankMode.value === 'auto' ? null : rerankMode.value === 'on',
+        // 形象 id 一并下发：后端据此决定语气人设，闲聊类提问（自我介绍/寒暄）
+        // 用这个形象的身份应答，不检索知识库（见 backend/app/services/avatar_persona.py）
+        avatar_id: avatarState.faceId,
       },
       {
         signal: controller.signal,
@@ -559,6 +575,39 @@ onBeforeUnmount(() => {
   font-size: 13px;
   color: #909399;
   line-height: 1.7;
+}
+
+.thread-welcome-face {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.thread-welcome-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.thread-welcome-desc {
+  font-size: 11px;
+  color: #a8abb2;
+}
+
+.thread-welcome-say {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #4a4f5c;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 0 10px 10px 10px;
+}
+
+.thread-welcome-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #c0c4cc;
 }
 
 .thread-samples {

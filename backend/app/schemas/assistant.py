@@ -102,6 +102,9 @@ class ChatRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=20)
     scope: str = "all"
     use_rerank: bool | None = None
+    # 当前数字人形象 id（见 services/avatar_persona.py）：决定回答的语气人设，
+    # 以及闲聊类提问（自我介绍/寒暄）用哪套身份应答。前端从形象库取，未知值走兜底人设。
+    avatar_id: str | None = Field(default=None, max_length=32)
 
     @field_validator("scope")
     @classmethod

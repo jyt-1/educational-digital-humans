@@ -19,14 +19,15 @@ export function fetchVoices() {
  * 2. 传 `silent: true`——语音是增强项，不可用时调用方静默跳过，不弹错误提示。
  *
  * @param {string} text 原始 Markdown，清洗在后端做
- * @param {{voice?: string, signal?: AbortSignal}} opts
+ * @param {{voice?: string, rate?: string, pitch?: string, signal?: AbortSignal}} opts
+ *        rate/pitch 是形象级音色风格（见 faces.js 的 voiceStyle），缺省由后端 .env 决定
  * @returns {Promise<ArrayBuffer>}
  */
-export async function speak(text, { voice, signal } = {}) {
+export async function speak(text, { voice, rate, pitch, signal } = {}) {
   try {
     const resp = await http.post(
       '/tts/speak',
-      { text, voice },
+      { text, voice, rate, pitch },
       { responseType: 'arraybuffer', timeout: 30000, silent: true, signal },
     )
     return resp.data

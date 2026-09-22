@@ -48,6 +48,8 @@ speech.onStateChange((state) => {
 function syncQueue() {
   speech.setEnabled(avatarState.available && avatarState.enabled)
   speech.setVoice(avatarState.voice)
+  // 音色风格随形象走（如小满的萌音）；用户手动改音色不改风格——风格是形象的嗓音调性
+  speech.setTuning(avatarState.face?.voiceStyle || {})
 }
 
 /** 问答页挂载时调一次。失败不抛：语音是增强项，不可用时页面照常。 */
@@ -95,4 +97,5 @@ export function setFace(id) {
     ? avatarState.voices.some((v) => v.short_name === face.defaultVoice)
     : true
   if (face.defaultVoice && known) setVoice(face.defaultVoice)
+  else syncQueue() // 音色不动时也要把新形象的 voiceStyle（如小满的萌音）推给队列
 }
