@@ -1,6 +1,6 @@
 <!-- [工单21] 人工智能NLP-Agent数字人项目-教育智能体-虚拟教室/讲课页 —— 课件+数字人讲课视频联动（离线 Wav2Lip 管线产物） -->
 <template>
-  <div class="lecture-room" v-loading="loading">
+  <div class="lecture-room" :class="{ 'is-studio': isStudio }" v-loading="loading">
     <template v-if="course">
       <div class="lr-courseware">
         <div class="lr-course-head">
@@ -12,6 +12,7 @@
             <el-option v-for="c in courses" :key="c.courseId" :label="c.title" :value="c.courseId" />
           </el-select>
           <el-tag size="small" type="info" effect="plain">{{ course.subject }}</el-tag>
+          <el-tag v-if="isStudio" size="small" effect="plain" type="success">演播室版</el-tag>
         </div>
 
         <div class="lr-page-card">
@@ -45,13 +46,14 @@
             @ended="playing = false"
             @play="playing = true"
             @pause="playing = false"
+            @error="onVideoError"
           ></video>
           <div v-if="videoError" class="lr-video-fallback">
             视频未生成：请先在 wav2lip/ 下运行 gen_lecture.py
           </div>
         </div>
 
-        <div class="lr-subtitle" v-if="currentSeg">{{ currentSeg.text }}</div>
+        <div class="lr-subtitle" v-if="currentSeg && !isStudio">{{ currentSeg.text }}</div>
 
         <div class="lr-controls">
           <el-button
@@ -100,7 +102,24 @@ const activePage = ref(0)
 const currentIdx = ref(-1)
 
 const currentCourse = computed(() => courses.value.find((c) => c.courseId === currentId.value))
-const videoSrc = computed(() => (currentCourse.value ? `${currentCourse.value.base}/video.mp4` : ''))
+// 演播室版式（video-studio.mp4，compose_studio.py 产物）优先；加载失败自动回退原始 video.mp4
+const studioFallback = ref(false)
+const isStudio = computed(() => !!currentCourse.value?.studio && !studioFallback.value)
+const videoSrc = computed(() => {
+  if (!currentCourse.value) return ''
+  return isStudio.value
+    ? `${currentCourse.value.base}/video-studio.mp4`
+    : `${currentCourse.value.base}/video.mp4`
+})
+
+function onVideoError() {
+  if (isStudio.value) {
+    studioFallback.value = true
+    videoError.value = false
+  } else {
+    videoError.value = true
+  }
+}
 
 const pages = computed(() => course.value?.pages || [])
 const currentSeg = computed(() => timeline.value[currentIdx.value] || null)
@@ -127,6 +146,7 @@ function resetPlayer() {
   activePage.value = 0
   playing.value = false
   videoError.value = false
+  studioFallback.value = false
 }
 
 async function onCourseChange() {
@@ -236,11 +256,16 @@ onBeforeUnmount(() => {
   min-height: 520px;
   padding: 4px 2px;
 }
+/* 默认（基础版式）：左右对半，竖屏人像不被放大 */
 .lr-courseware {
   flex: 1.15;
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+/* 演播室版：左栏缩为窄条导航，视频占其余全部宽度 */
+.lecture-room.is-studio .lr-courseware {
+  flex: 0 0 320px;
 }
 .lr-course-head {
   display: flex;
@@ -261,16 +286,28 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
+.lecture-room.is-studio .lr-page-card {
+  padding: 16px 18px;
+}
 .lr-page-title {
   margin: 0 0 18px;
   font-size: 22px;
   border-left: 4px solid #409eff;
   padding-left: 12px;
 }
+.lecture-room.is-studio .lr-page-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  padding-left: 10px;
+}
 .lr-page-body {
   font-size: 16px;
   line-height: 1.9;
   color: #303133;
+}
+.lecture-room.is-studio .lr-page-body {
+  font-size: 13px;
+  line-height: 1.75;
 }
 .lr-page-body :deep(p) {
   margin: 0 0 14px;
@@ -298,6 +335,11 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 14px 0 0;
 }
+.lecture-room.is-studio .lr-page-dots {
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0 0;
+}
 .lr-dot {
   width: 30px;
   height: 30px;
@@ -307,6 +349,11 @@ onBeforeUnmount(() => {
   cursor: pointer;
   font-size: 13px;
   color: #606266;
+}
+.lecture-room.is-studio .lr-dot {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
 }
 .lr-dot.active {
   background: #409eff;
@@ -318,6 +365,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 380px;
+}
+.lecture-room.is-studio .lr-stage {
+  min-width: 0;
 }
 .lr-video-card {
   position: relative;

@@ -235,6 +235,17 @@ def _run_pipeline(job: _Job, spec_path: Path, out_dir: Path) -> None:
             raise RuntimeError(f"管线退出码 {proc.returncode}，输出尾部：\n" + "\n".join(tail[-25:]))
         if not (out_dir / "video.mp4").exists():
             raise RuntimeError("管线结束但未产出 video.mp4")
+        # 追加演播室版式合成（compose_studio.py，纯 CPU）；失败不致命——
+        # 老版式 video.mp4 仍在，前端按 studio 标记自动回退
+        if (WAV2LIP_DIR / "compose_studio.py").exists():
+            job.progress = 95
+            job.message = "合成演播室版式"
+            studio = subprocess.run(
+                [PYTHON, str(WAV2LIP_DIR / "compose_studio.py"), str(out_dir)],
+                cwd=str(WAV2LIP_DIR), capture_output=True, text=True,
+                encoding="utf-8", errors="ignore", env=_pipeline_env(), timeout=1800)
+            if studio.returncode != 0:
+                job.message = "生成完成（演播室版合成失败，暂用基础版式）"
         job.progress = 100
         job.status = "done"
         job.message = "生成完成"
@@ -308,7 +319,9 @@ def _scan_courses(root: Path, base_prefix: str) -> list[dict]:
             try:
                 c = json.loads(meta.read_text(encoding="utf-8"))
                 out.append({"courseId": c.get("courseId", d.name), "title": c.get("title", d.name),
-                            "subject": c.get("subject", ""), "base": f"{base_prefix}/{d.name}"})
+                            "subject": c.get("subject", ""), "base": f"{base_prefix}/{d.name}",
+                            # 演播室版式合成片（compose_studio.py 产物）存在则优先播放
+                            "studio": (d / "video-studio.mp4").exists()})
             except ValueError:
                 continue
     return out
