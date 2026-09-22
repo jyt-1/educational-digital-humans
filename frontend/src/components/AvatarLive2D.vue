@@ -76,6 +76,58 @@ function setParam(name, value) {
   }
 }
 
+/**
+ * 安全叠加参数（在动作/呼吸位移**之上**再加一点）：写头部摆动用。
+ * 用叠加而不是绝对赋值，是为了不抹掉库自带的 natural movement（呼吸、视线漂移）。
+ * Cubism2 每帧 update 末尾会 loadParam() 还原到动作后的快照，所以叠加不会跨帧累积。
+ */
+function addParam(name, delta) {
+  try {
+    coreModel?.addToParamFloat(name, delta)
+  } catch {
+    /* 参数不存在：忽略 */
+  }
+}
+
+/**
+ * 口型与摆头：**必须挂在 internalModel 的 `beforeModelUpdate` 事件上**，不能写进 app.ticker。
+ *
+ * pixi-live2d-display（cubism2）一帧的更新顺序是：
+ *   motionManager.update()  ← ⚠️ 这里
+ *   → 表情 / 眨眼 / 视线 / natural movement / 物理 / pose
+ *   → emit('beforeModelUpdate')  ← 我们在这里写入
+ *   → model.update()（真正计算顶点）
+ *
+ * ⚠️ 踩过的坑：idle 动作文件（shizuku 的 mtn/idle_00~02.mtn）**自带 PARAM_MOUTH_OPEN_Y
+ * 曲线**，所以在 ticker 里写的口型值会被 motionManager 覆盖——只有动作间隙
+ * （motionUpdated=false，即两段 idle 之间）我们的值才活下来，表现为
+ * **「说话时嘴有时动、有时一动不动」**，且与音量大小无关，看着像随机。
+ * 挂到 beforeModelUpdate 之后，写入发生在所有动作之后、渲染之前，逐帧稳定生效。
+ */
+function writeFaceParams() {
+  const t = performance.now() - t0
+  const state = avatarState.speaking
+    ? 'speaking'
+    : props.listening
+      ? 'listening'
+      : props.thinking
+        ? 'thinking'
+        : 'idle'
+
+  if (state === 'speaking') {
+    // 说话：口型由真实播放音量说了算，这里用**绝对赋值**压过 idle 动作自带的嘴部曲线
+    setParam('PARAM_MOUTH_OPEN_Y', Math.min(1, speech.getVolume()))
+    addParam('PARAM_ANGLE_Z', Math.sin((t / 1100) * Math.PI * 2) * 3)
+  } else if (state === 'listening') {
+    // 聆听：静息嘴 + 慢速侧倾 + 轻微点头（表示「在听」）；口型不写，交给动作自然呼吸
+    addParam('PARAM_ANGLE_Z', Math.sin((t / 2600) * Math.PI * 2) * 2.5)
+    addParam('PARAM_ANGLE_Y', Math.sin((t / 1600) * Math.PI * 2) * 1.5)
+  } else if (state === 'thinking') {
+    addParam('PARAM_ANGLE_X', 3)
+  }
+  // idle：什么都不写——让模型自带的 idle 动作与呼吸全权接管，待机更像真人
+}
+
 async function mount() {
   try {
     await loadCore()
@@ -104,6 +156,9 @@ async function mount() {
     ready.value = true
 
     t0 = performance.now()
+    // 口型/摆头挂在模型更新链里（见 writeFaceParams 注释），而不是 ticker
+    model.internalModel.on('beforeModelUpdate', writeFaceParams)
+
     app.ticker.add(() => {
       if (!app || !model) return
       // 容器尺寸变化（窗口缩放 / 切布局）时重新适配
@@ -114,26 +169,6 @@ async function mount() {
         lastH = h
         fit()
       }
-      const t = performance.now() - t0
-      const state = avatarState.speaking
-        ? 'speaking'
-        : props.listening
-          ? 'listening'
-          : props.thinking
-            ? 'thinking'
-            : 'idle'
-      // 口型：音量直接映射张嘴参数（与照片档同源，真实音频驱动）
-      setParam('PARAM_MOUTH_OPEN_Y', state === 'speaking' ? speech.getVolume() : 0)
-      // 微动作：说话时轻摆、聆听时慢速侧倾 + 轻微点头（表示「在听」）
-      const angleZ =
-        state === 'speaking'
-          ? Math.sin((t / 1100) * Math.PI * 2) * 3
-          : state === 'listening'
-            ? Math.sin((t / 2600) * Math.PI * 2) * 2.5
-            : 0
-      setParam('PARAM_ANGLE_Z', angleZ)
-      setParam('PARAM_ANGLE_Y', state === 'listening' ? Math.sin((t / 1600) * Math.PI * 2) * 1.5 : 0)
-      setParam('PARAM_ANGLE_X', state === 'thinking' ? 3 : 0)
     })
   } catch (e) {
     console.warn('[数字人] Live2D 加载失败：', e)
@@ -145,6 +180,7 @@ onMounted(mount)
 
 onBeforeUnmount(() => {
   try {
+    model?.internalModel?.off?.('beforeModelUpdate', writeFaceParams)
     app?.ticker?.stop()
     model?.destroy()
     app?.destroy(true, { children: true })
