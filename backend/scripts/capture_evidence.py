@@ -1066,6 +1066,136 @@ def stage_avatar_speech(ev: Evidence) -> None:
     ev.shot("数字人-静音态")
 
 
+# ------------------------------------------------------------------ 工单20
+
+def stage_avatar_gallery(ev: Evidence) -> None:
+    """工单20 形象库：设置弹层里 6 写实 + 1 Live2D；切换形象即时生效并落 localStorage。
+
+    切换是**真实写用户设置**的操作——收尾把原形象切回去，取证不留痕。
+    """
+    page = ev.page
+    goto(ev, "/assistant/chat", ".spot-stage")
+    ev.check("沉浸式舞台已渲染", page.locator(".spot-stage").count() == 1)
+
+    page.locator(".spot-tool[title='切换形象与音色']").click()
+    page.wait_for_selector(".face-grid", timeout=10000)
+    page.wait_for_timeout(400)
+    ev.shot("形象库-设置弹层")
+
+    cards = page.locator(".face-card")
+    ev.check("形象卡 ≥ 7（6 写实 + 1 Live2D）", cards.count() >= 7, f"{cards.count()} 个")
+    ev.check("当前形象标「使用中」", page.locator(".face-current").count() == 1)
+    grid_text = page.locator(".face-grid").inner_text()
+    ev.check("清单含 Live2D 档（小满）", "小满" in grid_text)
+
+    # 记住原形象，切到另一个（避开 Live2D——pixi 懒加载慢，且工单20 验收点在"可切换"）
+    orig_idx = next(i for i in range(cards.count())
+                    if cards.nth(i).locator(".face-current").count() == 1)
+    orig_name = cards.nth(orig_idx).locator(".face-name").inner_text().strip()
+    target_idx = next(i for i in range(cards.count())
+                      if i != orig_idx and "小满" not in cards.nth(i).inner_text())
+    face_key_before = page.evaluate("() => localStorage.getItem('edu_agent_face_v2') || ''")
+    cards.nth(target_idx).click()
+    page.wait_for_timeout(600)
+    ev.shot("形象库-切换后")
+    ev.check(f"切换后「{cards.nth(target_idx).locator('.face-name').inner_text().strip()}」标为使用中",
+             cards.nth(target_idx).locator(".face-current").count() == 1)
+    face_key_after = page.evaluate("() => localStorage.getItem('edu_agent_face_v2') || ''")
+    ev.check("形象选择已落 localStorage 且发生变化",
+             bool(face_key_after) and face_key_after != face_key_before,
+             f"{face_key_before or '(空)'} → {face_key_after}")
+
+    voice = page.evaluate(
+        "() => localStorage.getItem('edu_agent_tts_voice_v2') || ''")
+    ev.check("音色随形象自动配对（非空）", voice.startswith("zh-CN"), voice)
+
+    # 还原：切回原形象
+    cards.nth(orig_idx).click()
+    page.wait_for_timeout(500)
+    ev.check("已还原原形象",
+             page.evaluate("() => localStorage.getItem('edu_agent_face_v2') || ''") == face_key_before)
+
+
+# ------------------------------------------------------------------ 工单21
+
+def stage_lecture_room(ev: Evidence) -> None:
+    """工单21 虚拟教室：课程列表 + 演播室版播放 + 时间轴驱动翻页联动。"""
+    page = ev.page
+    goto(ev, "/lecture", ".lr-video-card video")
+    ev.shot("虚拟教室-初始")
+
+    page.locator(".lr-course-head .el-select").click()
+    page.wait_for_timeout(300)
+    opts = page.locator(".el-select-dropdown:visible .el-select-dropdown__item")
+    ev.check("课程列表 ≥ 4 门（内置示例 + 教师成课）", opts.count() >= 4, f"{opts.count()} 门")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(250)
+
+    # 选演播室版课程（p16/p17 同名「人工智能导论-1-教案」，任一均可）
+    choose_in_select(page, page.locator(".lr-course-head .el-select"), "人工智能导论-1-教案")
+    page.wait_for_timeout(900)
+    ev.check("演播室版标记出现", page.get_by_text("演播室版", exact=True).count() >= 1)
+    src = page.locator(".lr-video-card video").get_attribute("src") or ""
+    ev.check("播放的是演播室合成片（video-studio.mp4）", "video-studio.mp4" in src, src)
+
+    # 静音播放，等元数据就绪
+    page.evaluate(
+        "() => { const v = document.querySelector('.lr-video-card video');"
+        " v.muted = true; v.play().catch(() => {}); }")
+    page.wait_for_function(
+        "() => (document.querySelector('.lr-video-card video')?.duration || 0) > 10",
+        timeout=30000)
+    dur = page.evaluate("() => document.querySelector('.lr-video-card video').duration")
+    ev.check("视频时长正常（> 60s）", dur > 60, f"{dur:.0f}s")
+    page.wait_for_timeout(1800)
+    ev.shot("虚拟教室-演播室播放中")
+
+    # 时间轴驱动翻页：跳到 1/3 处，页码高亮应变化
+    d0 = page.locator(".lr-dot.active").inner_text().strip()
+    page.evaluate(
+        "() => { const v = document.querySelector('.lr-video-card video');"
+        " v.currentTime = v.duration / 3; }")
+    page.wait_for_timeout(1400)
+    d1 = page.locator(".lr-dot.active").inner_text().strip()
+    ev.check("跳进度后课件页联动翻页", d0 != d1, f"第 {d0} 页 → 第 {d1} 页")
+    ev.shot("虚拟教室-翻页联动")
+    page.evaluate("() => document.querySelector('.lr-video-card video')?.pause()")
+
+
+# ------------------------------------------------------------------ 工单22
+
+def stage_desk_layout(ev: Evidence) -> None:
+    """工单22 沉浸式助教台：左 ~25% 控制区 + 右舞台 + 悬浮输入条 + 引用抽屉。"""
+    page = ev.page
+    goto(ev, "/assistant/chat", ".desk")
+    page.wait_for_timeout(600)
+    ev.shot("助教台-整页布局")
+
+    ev.check("左控制区（会话列表/空态）存在",
+             page.locator(".desk-side .side-convs, .desk-side .side-empty").count() >= 1)
+    ev.check("右舞台（AvatarSpotlight）存在", page.locator(".desk-stage .spot-stage").count() == 1)
+    ratio = page.evaluate(
+        "() => { const s = document.querySelector('.desk-side');"
+        " const d = document.querySelector('.desk');"
+        " return d && s ? s.offsetWidth / d.offsetWidth : 0; }")
+    ev.check("左栏约占 1/4 宽（20%~32%）", 0.20 <= ratio <= 0.32, f"实测比例 {ratio:.2f}")
+    ev.check("底部悬浮输入条存在", page.locator(".stage-textarea").count() == 1)
+    ev.check("舞台状态胶囊存在", page.locator(".spot-capsule").count() == 1)
+    ev.check("会话区（欢迎语或历史消息）已渲染",
+             page.locator(".thread-welcome, .thread-row").count() >= 1)
+    ev.shot("助教台-左栏细节", full=False)
+
+    # 引用抽屉：空会话可能没有历史引用，仅有 toggle 时才验
+    toggle = page.locator(".cites-toggle")
+    if toggle.count():
+        toggle.first.click()
+        page.wait_for_timeout(600)
+        ev.shot("助教台-引用抽屉")
+        ev.check("引用抽屉可展开", page.locator(".cites-panel").count() >= 1)
+    else:
+        ev.note("空会话无引用入口，抽屉联动由问答流覆盖（工单18 已验）")
+
+
 # ------------------------------------------------------------------ 主流程
 
 _case_plan_id = ""
@@ -1088,6 +1218,9 @@ STAGES = [
     ("learn-related-chat", "learn", stage_learn_related_chat, "19", "student"),
     ("teacher-governance", "learn", stage_teacher_governance, "19", "teacher"),
     ("avatar-speech", "avatar", stage_avatar_speech, "阶段二", "teacher"),
+    ("avatar-gallery", "avatar", stage_avatar_gallery, "20", "teacher"),
+    ("lecture-room", "avatar", stage_lecture_room, "21", "teacher"),
+    ("desk-layout", "avatar", stage_desk_layout, "22", "teacher"),
 ]
 
 ACCOUNTS = {"teacher": TEACHER, "student": STUDENT}
@@ -1096,7 +1229,7 @@ ACCOUNTS = {"teacher": TEACHER, "student": STUDENT}
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="", help="只跑哪一组：lesson / assistant / learn / avatar（逗号分隔）")
-    ap.add_argument("--stage", default="", help="只跑某个 stage 名")
+    ap.add_argument("--stage", default="", help="只跑某个/某些 stage 名（逗号分隔）")
     ap.add_argument("--headed", action="store_true", help="显示浏览器窗口（默认无头）")
     args = ap.parse_args()
 
@@ -1105,7 +1238,8 @@ def main() -> int:
         groups = {g.strip() for g in args.only.split(",")}
         picked = [s for s in STAGES if s[1] in groups]
     if args.stage:
-        picked = [s for s in STAGES if s[0] == args.stage]
+        wanted = {s.strip() for s in args.stage.split(",")}
+        picked = [s for s in STAGES if s[0] in wanted]
     if not picked:
         print("没有匹配的 stage")
         return 2
@@ -1144,7 +1278,7 @@ def main() -> int:
         ctx.close()
         browser.close()
 
-    print(f"\n耗时 {time.time() - t0:.0f} 秒。截图目录：docs/evidence/工单{{17,18,19}}/ 与 docs/evidence/阶段二/")
+    print(f"\n耗时 {time.time() - t0:.0f} 秒。截图目录：docs/evidence/工单{{17..22,阶段二}}/")
     return 0 if ok_all else 1
 
 
