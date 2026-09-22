@@ -53,6 +53,14 @@ const routes = [
     meta: { title: '检索调试', group: '智能助教' },
   },
 
+  // ---- 工单21 虚拟教室（数字人讲课，离线 Wav2Lip 管线） ----
+  {
+    path: '/lecture',
+    name: 'lecture-room',
+    component: () => import('@/views/lecture/Room.vue'),
+    meta: { title: '虚拟教室', group: '虚拟教室' },
+  },
+
   // ---- 工单19 个性化学习推荐 ----
   { path: '/learn', redirect: '/learn/dashboard' },
   {

@@ -23,7 +23,15 @@
       </el-form-item>
     </el-form>
 
-    <el-table v-loading="loading" :data="rows" border stripe>
+    <!-- [修复] row-click 直接打开编辑；操作列 fixed 保证窄屏下按钮不被横向滚动藏住 -->
+    <el-table
+      v-loading="loading"
+      :data="rows"
+      border
+      stripe
+      class="plans-table"
+      @row-click="goEdit"
+    >
       <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
       <el-table-column prop="content_type" label="类型" width="80" align="center">
         <template #default="{ row }">
@@ -39,10 +47,15 @@
       <el-table-column label="更新时间" width="160">
         <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="230" align="center">
+      <el-table-column label="操作" width="290" align="center" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click="goEdit(row)">编辑</el-button>
-          <el-button link type="primary" :loading="exporting === row.id" @click="handleExport(row)">
+          <el-button link type="primary" @click.stop="goEdit(row)">编辑</el-button>
+          <el-button
+            link
+            type="primary"
+            :loading="exporting === row.id"
+            @click.stop="handleExport(row)"
+          >
             导出
           </el-button>
           <el-button
@@ -50,9 +63,18 @@
             link
             type="primary"
             :loading="exporting === -row.id"
-            @click="handleExport(row, 'pptx')"
+            @click.stop="handleExport(row, 'pptx')"
           >
             pptx
+          </el-button>
+          <!-- [工单21] 教案/课件专属：生成数字人讲课视频 -->
+          <el-button
+            v-if="['教案', '课件'].includes(row.content_type)"
+            link
+            type="success"
+            @click.stop="startLecture(row)"
+          >
+            成课
           </el-button>
         </template>
       </el-table-column>
@@ -70,17 +92,37 @@
         @current-change="load"
       />
     </div>
+
+    <!-- [工单21] 教案 → 讲课视频 弹层 -->
+    <LectureDialog v-model="lectureVisible" :plan="lecturePlan" />
   </div>
 </template>
 
+<style scoped>
+/* 行可点击打开，给个手型提示 */
+.plans-table :deep(tbody tr) {
+  cursor: pointer;
+}
+</style>
+
 <script setup>
 import { ElMessage } from 'element-plus'
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { downloadExport, listPlans } from '@/api/lesson'
+import LectureDialog from './LectureDialog.vue'
 
 const CONTENT_TYPES = ['教案', '课件', '习题', '案例', '试题']
+
+// 成课弹层：v-model 控开关，lecturePlan 指定当前教案行
+const lecturePlan = ref(null)
+const lectureVisible = computed({
+  get: () => lecturePlan.value !== null,
+  set: (v) => {
+    if (!v) lecturePlan.value = null
+  },
+})
 
 const router = useRouter()
 const loading = ref(false)
@@ -121,6 +163,11 @@ function handleReset() {
 
 function goEdit(row) {
   router.push({ name: 'lesson-edit', params: { id: row.id } })
+}
+
+// [工单21] 打开「生成讲课视频」弹层
+function startLecture(row) {
+  lecturePlan.value = row
 }
 
 async function handleExport(row, format = 'docx') {
