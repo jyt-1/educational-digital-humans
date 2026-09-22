@@ -1,4 +1,10 @@
-<!-- [工单20] 数字人形象层 —— 写实照片渲染（talking-photo，音量驱动口型）
+<!-- [工单20] 数字人形象层 —— 写实照片渲染（talking-photo）
+     v3：全像素形变（slice warp）。v2 的教训：眨眼覆层（从上方取皮肤贴图）与画出来的
+     口腔，本质都是「往照片上添加像素」，色调纹理和脸对不齐 → 用户看到的「一块一块」。
+     v3 口型和眨眼**零新增像素**：
+       口型 = 唇线以下位移场（smoothstep 渐变），下巴整体下移、中间像素连续拉伸，
+             唇缝的暗线被拉伸成「开口」，色调就是照片自己的；
+       眨眼 = 眼睑上方皮肤按位移场下压覆盖眼球，无贴图、无补丁边。
      形象由 props.face（faces.js 清单项）决定：换形象 = 换图 + 换几何标定，绘制逻辑通用。 -->
 <template>
   <canvas ref="canvasRef" class="avatar-photo" :aria-label="`数字人形象（${face.name}）`"></canvas>
@@ -8,7 +14,7 @@
 // 为什么不用 SVG：照片是位图，口型/眨眼只能靠 canvas 逐帧重绘。
 // 性能红线与 AvatarSpotlight 相同：**绝不触碰 Vue 响应式**——只读 speech.getVolume()
 // （普通数值）并直接写 canvas / style，问答页的热路径（Markdown 全量重渲染）不受影响。
-// 形象数据刻意复制到模块级普通变量（imgReady/geo），rAF 循环里不读 props。
+// 形象数据刻意复制到模块级普通变量（imgReady/geo/warp 层），rAF 循环里不读 props。
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { avatarState, speech } from '@/store/avatar'
@@ -31,18 +37,15 @@ const BLINK_MS = 150
 let img = new Image()
 let imgReady = false
 let geo = props.face.geometry
-// 分层缓存（必须在 loadFace 首次调用前声明，避免 TDZ）：
-let lidPatches = [] // 眨眼：每只眼一个「眼睑覆层」
-let jawLayer = null // 口型：唇线以下的下颌层（jaw-drop）
-let jawTopY = 0
-let mouthCv = null // 口型：口腔暗部离屏缓冲（每帧重绘内容、复用画布）
+// warp 层（必须在 loadFace 首次调用前声明，避免 TDZ）：
+let mouthWarp = null // 口型层 { src,out,mask,x0,top,bw,bh,lipY,jawZone,upZone,maxDrop }
+let eyeWarps = [] // 眨眼层，每眼一个
 
 function loadFace(face) {
   imgReady = false
   geo = face.geometry
-  lidPatches = []
-  jawLayer = null
-  mouthCv = null
+  mouthWarp = null
+  eyeWarps = []
   const next = new Image()
   next.onload = () => {
     img = next
@@ -83,7 +86,7 @@ function scheduleNextBlink(t) {
 }
 
 function blinkAmount(t) {
-  // DEV 取证钩子：浏览器 e2e 截图抓不到 150ms 瞬态，可定格闭眼帧检验眼睑覆层
+  // DEV 取证钩子：浏览器 e2e 截图抓不到 150ms 瞬态，可定格闭眼帧检验眼睑形变
   if (import.meta.env.DEV && window.__avatarBlinkHold) return 1
   if (blinkAt >= 0) {
     const p = (t - blinkAt) / BLINK_MS
@@ -98,182 +101,156 @@ function blinkAmount(t) {
   return 0
 }
 
-// ---------------------------------------------------------------- 分层构建（换形象时一次性）
-function buildFaceLayers() {
-  buildLidPatches()
-  buildJawLayer()
-  buildMouthBuffer()
+// ---------------------------------------------------------------- warp 基建
+// smoothstep：位移场的缓动核——t=0 处导数为 0（唇线/眼睑缘「贴住」，不产生叠影）
+function sstep(t) {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t
+  return x * x * (3 - 2 * x)
+}
+
+/** 四周羽化的蒙版：warp 区域贴回主画布时左右/上下渐隐，消除矩形硬边 */
+function makeFeatherMask(w, h, fx, fyT, fyB) {
+  const cv = document.createElement('canvas')
+  cv.width = w
+  cv.height = h
+  const c = cv.getContext('2d')
+  c.fillStyle = '#fff'
+  c.fillRect(0, 0, w, h)
+  c.globalCompositeOperation = 'destination-in'
+  const gx = c.createLinearGradient(0, 0, w, 0)
+  gx.addColorStop(0, 'rgba(0,0,0,0)')
+  gx.addColorStop(fx, 'rgba(0,0,0,1)')
+  gx.addColorStop(1 - fx, 'rgba(0,0,0,1)')
+  gx.addColorStop(1, 'rgba(0,0,0,0)')
+  c.fillStyle = gx
+  c.fillRect(0, 0, w, h)
+  const gy = c.createLinearGradient(0, 0, 0, h)
+  gy.addColorStop(0, 'rgba(0,0,0,0)')
+  gy.addColorStop(fyT, 'rgba(0,0,0,1)')
+  gy.addColorStop(1 - fyB, 'rgba(0,0,0,1)')
+  gy.addColorStop(1, 'rgba(0,0,0,0)')
+  c.fillStyle = gy
+  c.fillRect(0, 0, w, h)
+  return cv
 }
 
 /**
- * 眨眼 = 眼睑覆层。
- * 旧画法（压扁眼区 + 从眼睛**下方**挖皮肤补缝）会出「一块一块的色块」：
- * 脸颊皮肤的色调纹理和眼皮不一致，且矩形补丁有硬边。
- * 新画法：从眼睛**上方**取眼皮皮肤（色调与闭眼眼睑天然一致）做成四周羽化的覆层，
- * 眨眼时覆层从上往下盖下来——就是眼睑真的合上；覆层底缘自带一条柔和睫毛阴影。
- * 眼球内容不压扁：覆层没盖到的下方露出的是原图下眼睑，物理上正确。
+ * 建一个 warp 层：src（每帧从原图重取的干净源）+ out（逐行重排的输出）+ mask。
+ * field(dy, amt) => 源 y：目标行 dy 的内容来自源图第 field(dy) 行——
+ * 位移场只依赖 y（竖向），横向靠 mask 羽化过渡，因此逐行采样即可（step=2px）。
  */
-function buildLidPatches() {
-  const { naturalWidth: W, naturalHeight: H } = img
-  lidPatches = geo.eyes.map((eye) => {
-    const ew = geo.eyeHalfW * 2 * W
-    const eh = geo.eyeHalfH * 2 * H
-    const padX = Math.max(4, ew * 0.12)
-    const padB = Math.max(3, eh * 0.4)
-    const w = Math.round(ew + padX * 2)
-    const h = Math.round(eh + padB)
-    const cv = document.createElement('canvas')
-    cv.width = w
-    cv.height = h
-    const c = cv.getContext('2d')
-    // 皮肤来源：眼睛上方的眼皮区（比眼高 10% 起向上取 1.1 倍眼高），轻模糊 hides 睫毛/眉杂纹
-    const sy = (eye.cy - geo.eyeHalfH) * H - eh * 1.1
-    c.filter = 'blur(0.8px)'
-    c.drawImage(img, eye.cx * W - ew / 2, sy, ew, eh * 1.1, padX, 0, ew, h)
-    c.filter = 'none'
-    // 羽化：左右 15% 渐隐；纵向顶部 35% 渐隐、底缘 92% 后快速收（睫毛线位置）
-    c.globalCompositeOperation = 'destination-in'
-    const gh = c.createLinearGradient(0, 0, w, 0)
-    gh.addColorStop(0, 'rgba(0,0,0,0)')
-    gh.addColorStop(0.15, 'rgba(0,0,0,1)')
-    gh.addColorStop(0.85, 'rgba(0,0,0,1)')
-    gh.addColorStop(1, 'rgba(0,0,0,0)')
-    c.fillStyle = gh
-    c.fillRect(0, 0, w, h)
-    const gv = c.createLinearGradient(0, 0, 0, h)
-    gv.addColorStop(0, 'rgba(0,0,0,0)')
-    gv.addColorStop(0.35, 'rgba(0,0,0,1)')
-    gv.addColorStop(0.92, 'rgba(0,0,0,0.9)')
-    gv.addColorStop(1, 'rgba(0,0,0,0)')
-    c.fillStyle = gv
-    c.fillRect(0, 0, w, h)
-    c.globalCompositeOperation = 'source-over'
-    // 睫毛阴影线：画在覆层底缘上方一点，随覆层一起落下（闭眼时的「睫毛」）
-    c.fillStyle = 'rgba(62,36,30,0.42)'
-    c.filter = 'blur(1px)'
-    c.fillRect(padX + ew * 0.1, h - padB - 1.2, ew * 0.8, 1.5)
-    c.filter = 'none'
-    return { cv, w, padX }
-  })
+function makeWarpLayer(x0, top, bw, bh, fx, fyT, fyB, field) {
+  const src = document.createElement('canvas')
+  src.width = bw
+  src.height = bh
+  const out = document.createElement('canvas')
+  out.width = bw
+  out.height = bh
+  return { src, out, mask: makeFeatherMask(bw, bh, fx, fyT, fyB), x0, top, bw, bh, field }
 }
 
-function drawBlink(ctx, eye, blink, patch) {
-  if (!patch) return
-  const { naturalWidth: W, naturalHeight: H } = img
-  const ew = geo.eyeHalfW * 2 * W
-  const eh = geo.eyeHalfH * 2 * H
-  const ex = (eye.cx - geo.eyeHalfW) * W
-  const eyTop = (eye.cy - geo.eyeHalfH) * H
-  // 眼睑覆层从上盖下：高度 = 眼高 × blink。覆层没盖到的下方露出原图（下眼睑/下巩膜），
-  // 物理正确且没有补丁色块。
-  const lidH = eh * blink + 1
-  ctx.save()
-  ctx.filter = 'blur(0.5px)'
-  ctx.drawImage(patch.cv, ex - patch.padX, eyTop - 1, patch.w, lidH)
-  ctx.restore()
+/** 执行一次 warp：重取源 → 逐行按位移场重排 → mask 羽化 → 贴回主画布 */
+function applyWarp(ctx, layer, amt) {
+  const { src, out, mask, bw, bh } = layer
+  const sc = src.getContext('2d')
+  sc.clearRect(0, 0, bw, bh)
+  sc.drawImage(img, layer.x0, layer.top, bw, bh, 0, 0, bw, bh)
+  const oc = out.getContext('2d')
+  oc.clearRect(0, 0, bw, bh)
+  const step = 2
+  for (let dy = 0; dy < bh; dy += step) {
+    const sy = Math.max(0, Math.min(bh - 1, layer.field(dy, amt)))
+    oc.drawImage(src, 0, sy, bw, Math.min(step, bh - sy), 0, dy, bw, step)
+  }
+  oc.globalCompositeOperation = 'destination-in'
+  oc.drawImage(mask, 0, 0)
+  oc.globalCompositeOperation = 'source-over'
+  ctx.drawImage(out, layer.x0, layer.top)
 }
 
-// ---------------------------------------------------------------- 口型（jaw-drop，v2）
-// v1 两处翻车（用户实测截图）：① 口腔暗部是半透明径向渐变 → 底图唇齿透出来成「灰糊」；
-// ② 下颌层顶部羽化过宽（12px+）→ 下移的嘴唇与原位嘴唇交叉淡化成叠影。
-// v2：口腔改为**不透明**（clip 椭圆内填实色竖向渐变，仅边缘羽化）、宽度按真实嘴宽
-// （maxRx×1.45）、下移量上限压到 1.6% 图高、下颌层顶部羽化收窄到 6px。
-function buildJawLayer() {
+// ---------------------------------------------------------------- 分层构建（换形象时一次性）
+function buildFaceLayers() {
+  buildMouthWarp()
+  buildEyeWarps()
+}
+
+/**
+ * 口型层 = 下颌位移场。
+ * 唇线以上：上唇轻微上移（drop×0.28，让开口更饱满）；
+ * 唇线以下：位移从 0（唇线，导数 0 → 无叠影）平滑涨到 drop（下巴整体下移），
+ * 中间像素被连续拉伸——原唇缝的暗线随之拉开成「口腔」，不需要画任何暗色。
+ */
+function buildMouthWarp() {
   const { naturalWidth: W, naturalHeight: H } = img
-  jawTopY = Math.round(geo.mouth.cy * H)
-  const h = Math.round(H * geo.cropBottom) - jawTopY
-  if (h <= 24) {
-    jawLayer = null
+  const m = geo.mouth
+  const mx = m.cx * W
+  const my = m.cy * H
+  const ryH = m.maxRy * H
+  const rw = Math.max(m.maxRx * W * 1.6, ryH * 1.3)
+  const x0 = Math.max(0, Math.round(mx - rw))
+  const bw = Math.min(W, Math.round(mx + rw)) - x0
+  const top = Math.max(0, Math.round(my - ryH * 2.0))
+  const bot = Math.min(Math.round(H * geo.cropBottom), Math.round(my + ryH * 3.4))
+  const bh = bot - top
+  if (bh < 16 || bw < 16) {
+    mouthWarp = null
     return
   }
-  jawLayer = document.createElement('canvas')
-  jawLayer.width = W
-  jawLayer.height = h
-  const jc = jawLayer.getContext('2d')
-  jc.drawImage(img, 0, jawTopY, W, h, 0, 0, W, h)
-  // 羽化：左右 12%（背景/发丝处交叉淡化无痕）；顶部仅 6px（唇线处要「硬」，
-  // 否则下移的嘴唇和原嘴唇叠影——v1 灰糊的元凶之一）
-  jc.globalCompositeOperation = 'destination-in'
-  const gh = jc.createLinearGradient(0, 0, W, 0)
-  gh.addColorStop(0, 'rgba(0,0,0,0)')
-  gh.addColorStop(0.12, 'rgba(0,0,0,1)')
-  gh.addColorStop(0.88, 'rgba(0,0,0,1)')
-  gh.addColorStop(1, 'rgba(0,0,0,0)')
-  jc.fillStyle = gh
-  jc.fillRect(0, 0, W, h)
-  const gv = jc.createLinearGradient(0, 0, 0, h)
-  gv.addColorStop(0, 'rgba(0,0,0,0)')
-  gv.addColorStop(6 / h, 'rgba(0,0,0,1)')
-  gv.addColorStop(1, 'rgba(0,0,0,1)')
-  jc.fillStyle = gv
-  jc.fillRect(0, 0, W, h)
-  jc.globalCompositeOperation = 'source-over'
+  const lipY = my - top
+  const jawZone = ryH * 2.0
+  const upZone = ryH * 1.3
+  const maxDrop = Math.min(H * 0.021, ryH * 1.3)
+  mouthWarp = makeWarpLayer(
+    x0,
+    top,
+    bw,
+    bh,
+    0.16,
+    0.08,
+    0.08,
+    (dy, drop) => {
+      const rel = dy - lipY
+      if (rel < 0) return dy + drop * 0.4 * sstep(-rel / upZone)
+      return dy - drop * sstep(rel / jawZone)
+    },
+  )
+  mouthWarp.lipY = lipY
+  mouthWarp.maxDrop = maxDrop
 }
 
-function buildMouthBuffer() {
+/**
+ * 眨眼层 = 眼睑下压位移场。
+ * 眼下缘以下不动；从下缘往上位移平滑增大（smoothstep），到眼顶饱和为整块下压——
+ * 上方皮肤被连续拉下来盖住眼球，就是眼睑真的合上。
+ * 上界在眉毛下（cy-1.0eh）再乘一个衰减因子：位移集中收在眼眶内，眉毛不被拽下来。
+ */
+function buildEyeWarps() {
   const { naturalWidth: W, naturalHeight: H } = img
-  const rx = geo.mouth.maxRx * W * 1.45
-  mouthCv = document.createElement('canvas')
-  mouthCv.width = Math.max(8, Math.ceil(rx * 2))
-  mouthCv.height = Math.ceil(H * 0.016) + 14
-}
-
-function drawMouth(ctx, open) {
-  if (!jawLayer || !mouthCv) return
-  const { naturalWidth: W, naturalHeight: H } = img
-  const mx = geo.mouth.cx * W
-  const my = geo.mouth.cy * H
-  const rx = geo.mouth.maxRx * W * 1.45
-  // 开合度 → 下颌位移；上限 1.6% 图高（约 16px@1024，防「惊吓下巴」）
-  const drop = Math.min(open * geo.mouth.maxRy * H * 0.85, H * 0.016)
-  if (drop < 1) return // 微噪声不画，避免嘴部抖动
-
-  const mc = mouthCv.getContext('2d')
-  const cw = mouthCv.width
-  const ch = mouthCv.height
-  mc.clearRect(0, 0, cw, ch)
-  const cyL = drop * 0.5 + 2 // 腔体中心（局部坐标；缓冲区顶边对应图像 y = my-2）
-  const ryL = drop * 0.6 + 2
-
-  // ① 不透明口腔：椭圆 clip 内填竖向渐变（上暗下稍亮），底图唇齿完全不透出
-  mc.save()
-  mc.beginPath()
-  mc.ellipse(cw / 2, cyL, rx * 0.98, ryL, 0, 0, Math.PI * 2)
-  mc.clip()
-  const gv = mc.createLinearGradient(0, cyL - ryL, 0, cyL + ryL)
-  gv.addColorStop(0, '#2a0908')
-  gv.addColorStop(0.45, '#3f100d')
-  gv.addColorStop(1, '#5a2019')
-  mc.fillStyle = gv
-  mc.fillRect(0, 0, cw, ch)
-  // ② 上排牙：开口明显时贴上唇（亮度提高，因为腔体现在是实心的）
-  if (drop > 4) {
-    mc.fillStyle = 'rgba(238,230,222,0.85)'
-    mc.filter = 'blur(1.2px)'
-    mc.beginPath()
-    mc.ellipse(cw / 2, cyL - ryL * 0.62, rx * 0.66, Math.min(drop * 0.32, 4.5), 0, 0, Math.PI * 2)
-    mc.fill()
-    mc.filter = 'none'
-  }
-  mc.restore()
-
-  // ③ 腔体边缘羽化（径向渐变 destination-in，椭圆纵向压扁）
-  mc.globalCompositeOperation = 'destination-in'
-  mc.save()
-  mc.translate(cw / 2, cyL)
-  mc.scale(1, ryL / rx)
-  const rg = mc.createRadialGradient(0, 0, 0, 0, 0, rx)
-  rg.addColorStop(0, 'rgba(0,0,0,1)')
-  rg.addColorStop(0.7, 'rgba(0,0,0,1)')
-  rg.addColorStop(1, 'rgba(0,0,0,0)')
-  mc.fillStyle = rg
-  mc.fillRect(-rx - 2, -rx - 2, rx * 2 + 4, rx * 2 + 4)
-  mc.restore()
-  mc.globalCompositeOperation = 'source-over'
-
-  // ④ 合成：腔体顶边贴唇线，随后下颌下移盖上（下唇压住腔体底缘）
-  ctx.drawImage(mouthCv, mx - cw / 2, my - 2)
-  ctx.drawImage(jawLayer, 0, jawTopY + drop)
+  eyeWarps = geo.eyes.map((eye) => {
+    const ew = geo.eyeHalfW * 2 * W
+    const eh = geo.eyeHalfH * 2 * H
+    const rw = ew * 0.78
+    const x0 = Math.max(0, Math.round(eye.cx * W - rw))
+    const bw = Math.min(W, Math.round(eye.cx * W + rw)) - x0
+    const top = Math.max(0, Math.round(eye.cy * H - eh * 1.6))
+    const bh = Math.round(eh * 3.5)
+    const lidBotRel = eye.cy * H + eh * 0.9 - top
+    const browRel = eye.cy * H - eh * 1.0 - top
+    const browFade = eh * 0.8
+    const lidZone = eh
+    const maxLid = eh * 0.95
+    const layer = makeWarpLayer(
+      x0,
+      top,
+      bw,
+      bh,
+      0.2,
+      0.18,
+      0.1,
+      (dy, blink) => dy - blink * maxLid * sstep((lidBotRel - dy) / lidZone) * sstep((dy - browRel) / browFade),
+    )
+    return layer
+  })
 }
 
 // ---------------------------------------------------------------- 主循环
@@ -296,16 +273,21 @@ function loop(now) {
         : 'idle'
   const blink = blinkAmount(t)
   const pose = avatarState.provider.computePose({ volume: speech.getVolume(), state, t, blink })
+  // DEV 取证钩子：定格张嘴度（0~1）便于截图检验形变，与 __avatarBlinkHold 同性质
+  if (import.meta.env.DEV && typeof window.__avatarMouthHold === 'number') {
+    pose.open = window.__avatarMouthHold
+  }
 
   // 底图：裁掉底部水印带（cropBottom，见 faces.js 注释）
   const { naturalWidth: W, naturalHeight: H } = img
   ctx.drawImage(img, 0, 0, W, H * geo.cropBottom, 0, 0, W, H * geo.cropBottom)
 
   if (blink > 0.03) {
-    for (let i = 0; i < geo.eyes.length; i++) drawBlink(ctx, geo.eyes[i], blink, lidPatches[i])
+    for (let i = 0; i < eyeWarps.length; i++) applyWarp(ctx, eyeWarps[i], blink)
   }
-  if (pose.open > 0.02) {
-    drawMouth(ctx, pose.open)
+  if (mouthWarp) {
+    const drop = pose.open * mouthWarp.maxDrop
+    if (drop > 0.8) applyWarp(ctx, mouthWarp, drop)
   }
 
   // 头部微动走 CSS transform（合成器线程），不重绘画布
