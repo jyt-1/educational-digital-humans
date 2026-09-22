@@ -5,12 +5,12 @@
   <div v-else class="app-layout">
     <aside class="app-aside">
       <div class="app-logo">
-        教育智能体平台
-        <small>阶段一 · 工单16~19</small>
+        育智平台
+        <small>AI 教学智能体</small>
       </div>
       <el-menu
         :default-active="activeMenu"
-        :default-openeds="['lesson', 'assistant', 'learn']"
+        :default-openeds="['lesson', 'assistant', 'lecture', 'learn']"
         background-color="#001529"
         text-color="rgba(255,255,255,0.72)"
         active-text-color="#ffffff"
@@ -27,6 +27,11 @@
           <el-menu-item index="/assistant/chat">智能问答</el-menu-item>
           <el-menu-item index="/assistant/kb">知识库</el-menu-item>
           <el-menu-item index="/assistant/search">检索调试</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="lecture">
+          <template #title><span>虚拟教室</span></template>
+          <el-menu-item index="/lecture">数字人讲课</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="learn">
@@ -68,7 +73,7 @@ const route = useRoute()
 const router = useRouter()
 
 const isLoginPage = computed(() => route.name === 'login')
-const pageTitle = computed(() => route.meta.title || '教育智能体平台')
+const pageTitle = computed(() => route.meta.title || '育智平台')
 
 // 详情页高亮其所属列表菜单
 const activeMenu = computed(() => {

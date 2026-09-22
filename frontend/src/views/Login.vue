@@ -2,9 +2,9 @@
 <template>
   <div class="login-wrap">
     <el-card class="login-card">
-      <h2 style="margin: 0 0 4px">教育智能体平台</h2>
+      <h2 style="margin: 0 0 4px">育智平台</h2>
       <p style="margin: 0 0 20px; color: #909399; font-size: 13px">
-        阶段一 · 智能备课 / 智能助教 / 个性化学习 / 面试AI复盘
+        智能备课 · 智能助教 · 个性化学习 · 数字人形象层
       </p>
 
       <el-tabs v-model="tab">
