@@ -342,6 +342,37 @@ def test_build_analytics_brief_states_denominator(client, kps):
     assert "文本班" in brief
 
 
+def test_difficulty_mix_spans_all_class_knowledge_points(client, kps):
+    """难度配比必须按**全班**知识点分档，不能只统计薄弱点。
+
+    只统计薄弱点会退化：薄弱点按定义全部 < 0.6，于是"中等/困难"恒为 0，
+    这行永远输出"简单 100%"——不仅没信息量，还等于叫模型把整套题都出成简单题。
+    （设计文档 3.2.8 第④条原文是"按**班级**掌握度算出"。）
+
+    构造：一个学生答满 4 个知识点，掌握度分别落在简单/中等/困难三档。
+    """
+    klass = _make_class("配比班")
+    sid = _new_students(1)[0]
+    _add_members(klass, [sid])
+
+    # 基础概念: 全错 → 0.0（简单档）；关键原理: 2/3 对 → 0.67（中等档）
+    for _ in range(2):
+        _answer(sid, kps["基础概念"], correct=False)
+    for correct in (True, True, False):
+        _answer(sid, kps["关键原理"], correct=correct)
+    # 进阶算法: 全对 → 1.0（困难档）
+    for _ in range(2):
+        _answer(sid, kps["进阶算法"], correct=True)
+
+    with SessionLocal() as db:
+        stats = class_profile.class_mastery(db, klass)
+        mix = class_profile._difficulty_mix(list(stats.values()))
+        brief = class_profile.build_analytics_brief(db, klass)
+
+    assert mix == {"简单": 1, "中等": 1, "困难": 1}, f"三档都该出现，实际 {mix}"
+    assert "困难 33%" in brief and "中等 33%" in brief, "配比行不得退化成简单 100%"
+
+
 # ------------------------------------------------------------------ Task 4
 
 

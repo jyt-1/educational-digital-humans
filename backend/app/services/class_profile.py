@@ -200,6 +200,11 @@ def _difficulty_mix(rows: list[ClassMastery]) -> dict[str, int]:
 
     统计单位是"知识点"而不是"题目"——题目还没生成，此时能确定的只有
     "哪些点需要出难题"。给出条数后由模型自行换算成题量比例。
+
+    **入参必须是全班有证据的知识点**（设计文档 3.2.8 第④条："按**班级**掌握度算出"），
+    不能只传薄弱点：薄弱点按定义全部低于 `WEAK_THRESHOLD`，那样"中等/困难"两档
+    永远为零，这行会退化成恒定的"简单 100%"——既没信息量，还会误导模型把整套题
+    都出成简单题，恰恰放弃了对已掌握知识点的区分度。
     """
     mix = {"简单": 0, "中等": 0, "困难": 0}
     for stat in rows:
@@ -327,13 +332,15 @@ def build_analytics_brief(db: Session, class_id: int, *, top_n: int = BRIEF_TOP_
             line += f"；该知识点未掌握会直接影响：{'、'.join(item['blocks'][:3])}"
         lines.append(line)
 
-    mix = _difficulty_mix([stats[item["kp_id"]] for item in weak])
+    # 分档口径是**全班有证据的知识点**，不是上面列出的薄弱点（理由见 _difficulty_mix）
+    mix = _difficulty_mix(list(stats.values()))
     total = sum(mix.values()) or 1
     ratio = "、".join(f"{name} {value / total:.0%}" for name, value in mix.items())
     lines += [
         "",
         f"建议难度配比：{ratio}"
-        f"（按上述薄弱知识点各自的掌握度分档统计，共 {total} 个知识点）。",
+        f"（按本班 {total} 个有证据的知识点各自的掌握度分档统计；"
+        f"难度不是越高越好，按此比例出题才能同时覆盖补弱与拔高）。",
         f"课堂设计请针对前 {min(3, len(weak))} 个薄弱点安排前置复习或导入环节。",
     ]
     return "\n".join(lines)
