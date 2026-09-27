@@ -10,7 +10,7 @@
       </div>
       <el-menu
         :default-active="activeMenu"
-        :default-openeds="['lesson', 'assistant', 'lecture', 'learn']"
+        :default-openeds="['lesson', 'assistant', 'lecture', 'learn', 'teach']"
         background-color="#001529"
         text-color="rgba(255,255,255,0.72)"
         active-text-color="#ffffff"
@@ -41,6 +41,11 @@
           <el-menu-item index="/learn/practice">练习与试卷</el-menu-item>
           <el-menu-item index="/learn/mistakes">错题本</el-menu-item>
         </el-sub-menu>
+
+        <el-sub-menu v-if="isTeacher()" index="teach">
+          <template #title><span>班级学情</span></template>
+          <el-menu-item index="/teach/class">我的班级</el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </aside>
 
@@ -67,7 +72,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { authState, clearAuth } from '@/store/user'
+import { authState, clearAuth, isTeacher } from '@/store/user'
 
 const route = useRoute()
 const router = useRouter()

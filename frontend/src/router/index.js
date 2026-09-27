@@ -53,6 +53,14 @@ const routes = [
     meta: { title: '检索调试', group: '智能助教' },
   },
 
+  // ---- 工单23 班级学情闭环（教师侧） ----
+  {
+    path: '/teach/class',
+    name: 'teach-class',
+    component: () => import('@/views/teach/ClassInsight.vue'),
+    meta: { title: '我的班级', group: '班级学情' },
+  },
+
   // ---- 工单21 虚拟教室（数字人讲课，离线 Wav2Lip 管线） ----
   {
     path: '/lecture',
