@@ -14,7 +14,7 @@ from app.db import SessionLocal
 from app.models.learn import Attempt, KnowledgePoint, Question
 from app.models.teach import Class, ClassMember
 from app.models.user import ROLE_STUDENT, ROLE_TEACHER, User
-from app.services import learn_profile
+from app.services import class_profile, learn_profile
 
 # 本文件专属课程名。知识点用课程名与工单19 用例的图谱隔开，
 # 两边断言互不干扰（唯一约束是 (course, name)，不同课程不会撞）
@@ -228,3 +228,115 @@ def test_compute_mastery_unchanged_for_single_student(client, kps):
     assert result[kp_id].kp_id == kp_id
     assert result[kp_id].mastery == pytest.approx(1.0)
     assert result[kp_id].attempt_count >= 1
+
+
+# ------------------------------------------------------------------ Task 3
+
+
+def test_class_mastery_is_mean_of_means(client, kps):
+    """口径：先算每个学生、再对全班取平均——不是把所有作答混在一起算。
+
+    A 答 1 题全对、B 答 9 题全错：
+      mean-of-means = 0.5，pooled = 0.1。这条用例必须能区分两者，否则等于没测。
+    """
+    klass = _make_class("口径班")
+    sid_a, sid_b = _new_students(2)
+    kp_id = kps["基础概念"]
+    _add_members(klass, [sid_a, sid_b])
+    _answer(sid_a, kp_id, correct=True)
+    for _ in range(9):
+        _answer(sid_b, kp_id, correct=False)
+
+    with SessionLocal() as db:
+        result = class_profile.class_mastery(db, klass)
+
+    assert result[kp_id].mastery == pytest.approx(0.5), "是 mean-of-means 而非 pooled"
+    assert result[kp_id].mastery != pytest.approx(0.1), "若等于 0.1 说明写成了混算"
+    assert result[kp_id].student_count == 2
+    assert result[kp_id].class_size == 2
+
+
+def test_class_mastery_coverage_three_cases(client, kps):
+    """覆盖率三种情形：空班 / 全员无证据 / 部分学生有证据。
+
+    ② 是全篇最脆的一条：它依赖"这几个学生一条作答都没有"。**必须用 `_new_students`**，
+    改成复用既有学生就会静默失真（详见文件头两条铁律）。
+    """
+    # ① 空班
+    empty = _make_class("空班")
+    with SessionLocal() as db:
+        assert class_profile.class_mastery(db, empty) == {}
+        assert class_profile.coverage(db, empty)["class_size"] == 0
+
+    # ② 有成员但全员无任何作答
+    silent = _make_class("沉默班")
+    _add_members(silent, _new_students(3))
+    with SessionLocal() as db:
+        assert class_profile.class_mastery(db, silent) == {}
+        assert class_profile.coverage(db, silent)["covered_students"] == 0
+
+    # ③ 部分学生有证据
+    partial = _make_class("部分班")
+    sids = _new_students(4)
+    kp_id = kps["基础概念"]
+    _add_members(partial, sids)
+    _answer(sids[0], kp_id, correct=True)
+
+    with SessionLocal() as db:
+        result = class_profile.class_mastery(db, partial)
+        cov = class_profile.coverage(db, partial)
+
+    assert result[kp_id].student_count == 1, "只有 1 人有证据"
+    assert result[kp_id].class_size == 4, "分母是全班人数，不是有证据的人数"
+    assert cov["class_size"] == 4
+    assert cov["covered_students"] == 1
+    assert cov["rate"] == pytest.approx(0.25)
+
+
+def test_heatmap_shape(client, kps):
+    """热力图数据形状：cells 是 `[学生下标, 知识点下标, 掌握度]`，缺失格不出现。
+
+    两个学生里只有 sids[0] 答了题，于是网格应当是 1 列 × 1 行、1 个格子。
+    断言写死具体下标，是为了防住"行列转置"这类看不出来的错——转置后
+    形状对得上、图却画反了。
+    """
+    klass = _make_class("热力班")
+    sids = _new_students(2)
+    kp_id = kps["基础概念"]
+    _add_members(klass, sids)
+    _answer(sids[0], kp_id, correct=True)   # 只有 sids[0] 有数据
+
+    with SessionLocal() as db:
+        grid = class_profile.class_heatmap(db, klass)
+
+    assert grid["kp_ids"] == [kp_id], "只有一个知识点有证据"
+    assert grid["student_ids"] == [sids[0]], "只列有证据的学生，否则整片空白"
+    assert grid["cells"] == [[0, 0, 1.0]], "1 学生 × 1 知识点，答对 → 1.0"
+    assert len(grid["students"]) == 1 and grid["students"][0], "x 轴标签要有名字"
+
+
+def test_build_analytics_brief_none_when_no_evidence(client):
+    """全班无任何证据时必须返回 None——否则教案模板会出现"要求依据下方数据、
+    下方却没有数据"的自相矛盾提示词。"""
+    klass = _make_class("无证据班")
+    _add_members(klass, _new_students(2))
+    with SessionLocal() as db:
+        assert class_profile.build_analytics_brief(db, klass) is None
+
+
+def test_build_analytics_brief_states_denominator(client, kps):
+    """有数据时 brief 必须写明分母与"不得编造"约束（设计文档 3.2.8 第(3)条）。"""
+    klass = _make_class("文本班")
+    sids = _new_students(3)
+    kp_id = kps["基础概念"]
+    _add_members(klass, sids)
+    for _ in range(3):
+        _answer(sids[0], kp_id, correct=False)  # 1/3 有证据且全错
+
+    with SessionLocal() as db:
+        brief = class_profile.build_analytics_brief(db, klass)
+
+    assert brief is not None
+    assert "不得编造" in brief
+    assert "3 人中 1 人" in brief, "必须写明分母：3 人中的 1 人 ≠ 全班 1 人"
+    assert "文本班" in brief
