@@ -1,4 +1,5 @@
 # [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— 验收取证脚本（覆盖工单17/18/19）
+# [工单23] 人工智能NLP-Agent数字人项目-教育智能体-班级学情闭环 —— 同文件追加 class-insight 场景
 """验收取证：驱动本机 Edge 把三个工单的验收动线真点一遍，截图落盘到 docs/evidence/工单XX/。
 
 为什么要有这个脚本
@@ -1196,6 +1197,44 @@ def stage_desk_layout(ev: Evidence) -> None:
         ev.note("空会话无引用入口，抽屉联动由问答流覆盖（工单18 已验）")
 
 
+# ------------------------------------------------------------------ 工单23
+
+
+def stage_class_insight(ev: Evidence) -> None:
+    """教师侧：班级学情看板 + 备课绑定班级 + 学情注入预览。"""
+    page = ev.page
+    goto(ev, "/teach/class")
+    page.wait_for_timeout(2000)   # 两次 ECharts 渲染 + 两次接口
+    ev.shot("班级学情-看板总览")
+
+    body = page.locator("body").inner_text()
+    ev.check("看板出现班级名", "人工智能2401班" in body)
+    ev.check("有参与度提示", "参与度" in body)
+    ev.check("有热力图卡片", "知识点 × 学生" in body)
+    ev.check("有薄弱排行卡片", "薄弱知识点排行" in body)
+    ev.check("有学情卡预览", "学情卡预览" in body)
+    ev.check("学情预览含不得编造约束", "不得编造" in body)
+
+    # 断言两张图真的画出来了，而不是只有卡片标题
+    canvases = page.locator("canvas").count()
+    ev.check("两张 ECharts 图已渲染", canvases >= 2, f"canvas={canvases}")
+
+    # 学生清单有数据（下钻可用）
+    rows = page.locator(".el-table__row").count()
+    ev.check("学生清单非空", rows >= 10, f"行数={rows}")
+
+    # 看板 → 生成页：班级应被预选、学情预览应出现
+    page.get_by_role("button", name="按学情备课").click()
+    page.wait_for_timeout(2500)
+    ev.shot("备课-按学情备课跳转后")
+    body2 = page.locator("body").inner_text()
+    ev.check("备课页出现学情注入预览", "将注入模型的学情" in body2)
+    # 断言学情正文本身，而不是"预览区在不在"：教师能核对的是这段文字的内容。
+    # 不复用弱排行那句的「人中」——它只在有薄弱点时出现，换个班就假失败
+    ev.check("预览到的是本班学情", "【本班学情】" in body2 and "人工智能2401班" in body2)
+    ev.check("预览含防编造约束", "不得编造" in body2)
+
+
 # ------------------------------------------------------------------ 主流程
 
 _case_plan_id = ""
@@ -1221,6 +1260,7 @@ STAGES = [
     ("avatar-gallery", "avatar", stage_avatar_gallery, "20", "teacher"),
     ("lecture-room", "avatar", stage_lecture_room, "21", "teacher"),
     ("desk-layout", "avatar", stage_desk_layout, "22", "teacher"),
+    ("class-insight", "teach", stage_class_insight, "23", "teacher"),
 ]
 
 ACCOUNTS = {"teacher": TEACHER, "student": STUDENT}
@@ -1228,7 +1268,7 @@ ACCOUNTS = {"teacher": TEACHER, "student": STUDENT}
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", default="", help="只跑哪一组：lesson / assistant / learn / avatar（逗号分隔）")
+    ap.add_argument("--only", default="", help="只跑哪一组：lesson / assistant / learn / avatar / teach（逗号分隔）")
     ap.add_argument("--stage", default="", help="只跑某个/某些 stage 名（逗号分隔）")
     ap.add_argument("--headed", action="store_true", help="显示浏览器窗口（默认无头）")
     args = ap.parse_args()
@@ -1278,7 +1318,7 @@ def main() -> int:
         ctx.close()
         browser.close()
 
-    print(f"\n耗时 {time.time() - t0:.0f} 秒。截图目录：docs/evidence/工单{{17..22,阶段二}}/")
+    print(f"\n耗时 {time.time() - t0:.0f} 秒。截图目录：docs/evidence/工单{{17..23,阶段二}}/")
     return 0 if ok_all else 1
 
 
