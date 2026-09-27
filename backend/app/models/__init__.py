@@ -1,6 +1,7 @@
 # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— ORM 模型注册
 # [工单18] 人工智能NLP-Agent数字人项目-教育智能体-智能助教任务 —— 同文件追加知识库与问答模型
 # [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— 同文件追加图谱与学习模型
+# [工单23] 人工智能NLP-Agent数字人项目-教育智能体-班级学情闭环 —— 同文件追加班级模型
 """集中导入所有 ORM 模型，确保 Base.metadata 完整（init_db 依赖此处的导入）。"""
 
 from app.models.assistant import (
@@ -36,6 +37,7 @@ from app.models.lesson import (
     Resource,
     TeachingPlan,
 )
+from app.models.teach import Class, ClassMember
 from app.models.user import ROLE_ADMIN, ROLE_STUDENT, ROLE_TEACHER, VALID_ROLES, User
 
 __all__ = [
@@ -47,6 +49,8 @@ __all__ = [
     "SOURCE_EXAM",
     "SOURCE_EXERCISE",
     "Attempt",
+    "Class",
+    "ClassMember",
     "Conversation",
     "Courseware",
     "ExamQuestion",

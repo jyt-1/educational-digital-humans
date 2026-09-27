@@ -1,4 +1,5 @@
 # [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— 增量结构迁移
+# [工单23] 人工智能NLP-Agent数字人项目-教育智能体-班级学情闭环 —— 同文件修正 create_all 日志文案（表数已不只工单19 那 10 张）
 """工单19 增量结构迁移（幂等，可重复执行）。
 
 **为什么需要迁移**：`Base.metadata.create_all()` 只对**缺失的表**发 `CREATE TABLE`，
@@ -68,7 +69,7 @@ def run(target: Engine | None = None) -> list[str]:
 
     # ① 建缺失的表（工单19 的 10 张新表在这里创建；已存在的表被跳过）
     Base.metadata.create_all(bind=bind)
-    applied: list[str] = [f"create_all: 已确保 {table_count} 张表存在（其中工单19 新表 10 张）"]
+    applied: list[str] = [f"create_all: 已确保 {table_count} 张表存在"]
 
     # ② 给既有表加列
     with bind.begin() as conn:
