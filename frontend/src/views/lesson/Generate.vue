@@ -51,6 +51,30 @@
             </el-radio-group>
           </el-form-item>
 
+          <el-form-item label="绑定班级">
+            <el-select
+              v-model="form.class_id"
+              clearable
+              placeholder="不绑定则不使用学情"
+              style="width: 100%"
+              @change="loadClassPreview"
+            >
+              <el-option
+                v-for="item in classes"
+                :key="item.id"
+                :label="`${item.name}（${item.student_count} 人）`"
+                :value="item.id"
+              />
+            </el-select>
+            <div v-if="classBrief" class="class-brief">
+              <div class="class-brief-head">将注入模型的学情（可核对）</div>
+              <pre>{{ classBrief }}</pre>
+            </div>
+            <div v-else-if="form.class_id" class="class-brief-empty">
+              该班暂无作答数据，生成时不会注入学情。
+            </div>
+          </el-form-item>
+
           <el-form-item label="教学目标">
             <el-select
               v-model="form.objectives"
@@ -134,11 +158,14 @@
 
 <script setup>
 import { ElMessage } from 'element-plus'
-import { computed, nextTick, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { streamGenerate } from '@/api/lesson'
+import { getInsight, listClasses } from '@/api/teach'
+import { isTeacher } from '@/store/user'
 
+const route = useRoute()
 const router = useRouter()
 
 const CONTENT_TYPES = ['教案', '课件', '习题', '案例', '试题']
@@ -167,7 +194,34 @@ const form = reactive({
   difficulty: '中等',
   objectives: [],
   extra: '',
+  class_id: null,
 })
+
+const classes = ref([])
+const classBrief = ref('')
+
+async function loadClasses() {
+  if (!isTeacher()) return
+  try {
+    const data = await listClasses()
+    classes.value = data.items || []
+  } catch {
+    /* 拦截器已提示 */
+  }
+}
+
+async function loadClassPreview() {
+  if (!form.class_id) {
+    classBrief.value = ''
+    return
+  }
+  try {
+    const data = await getInsight(form.class_id, { top_n: 6 })
+    classBrief.value = data.brief || ''
+  } catch {
+    classBrief.value = ''
+  }
+}
 
 const generating = ref(false)
 const status = ref('idle') // idle | streaming | done | error
@@ -261,4 +315,14 @@ function reset() {
   doneMsg.value = ''
   errorMsg.value = ''
 }
+
+onMounted(async () => {
+  await loadClasses()
+  // 看板「按学情备课」跳转过来时预选班级，省掉教师再选一次
+  const fromQuery = Number(route.query.class_id)
+  if (fromQuery && classes.value.some((item) => item.id === fromQuery)) {
+    form.class_id = fromQuery
+    await loadClassPreview()
+  }
+})
 </script>
