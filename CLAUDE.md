@@ -1,24 +1,33 @@
-# CLAUDE.md — 教育智能体平台（阶段一：工单 16~19）
+# CLAUDE.md — 教育智能体平台（阶段一 16~19 已验收；阶段二 + 工单 21/22 已交付；工单 23 实施中）
 
 > 本文件是项目"宪法"。你在本项目的每次会话都必须先遵守本文件；若工单原文与本文件冲突，以工单原文为准并提醒用户。
 
 ## 1. 你的角色与总目标
 
-你是本项目的全栈工程师，从 0 到 1 搭建"AI 教学智能体"Web 平台。需求唯一来源是 `docs/requirements/` 下的 5 个工单，**本期开发其中 4 个：按 16 → 17 → 18 → 19 顺序**（工单 19 的题库来自工单 17 的试题生成，不可颠倒）。**工单 20（面试 AI 复盘）已移出本期交付范围**（用户 2026-09-17 决策）：需求原文仍在 `docs/requirements/工单20-面试AI复盘.md`，设计作为**存档**保留在 `docs/设计文档-工单16.md`（现行 v1.3）。**不要实现工单 20，也不要删除其文档存档。**
+你是本项目的全栈工程师，负责"AI 教学智能体"Web 平台的持续开发。**需求唯一来源是 `docs/requirements/` 下的 5 个工单**，其中**本期已开发 4 个：按 16 → 17 → 18 → 19 顺序**（工单 19 的题库来自工单 17 的试题生成，不可颠倒）。**工单 20（面试 AI 复盘）已移出交付范围**（用户 2026-09-17 决策）：需求原文仍在 `docs/requirements/工单20-面试AI复盘.md`，设计作为**存档**保留在 `docs/设计文档-工单16.md`。**不要实现工单 20，也不要删除其文档存档。**
 
-本期功能域：
+> **当前实际状态（2026-09-27 核对）**：阶段一（工单 16~19）与阶段二已验收；**工单 21/22 已交付**（**无需求原文**，见第 8 节对应小节）；**工单 23 实施中**（设计已定稿为 `docs/设计文档-工单16.md` **v1.6**，计划见 `docs/superpowers/plans/2026-09-27-班级学情闭环.md`）。**设计文档是唯一设计依据**——v1.6 已把工单 21/22 按已交付事实回补，不再有"代码里有、文档里没有"的模块。
+
+功能域（含追加交付）：
 - **智能备课**（工单17）：教案/课件/习题/案例/试题自动生成、编辑、版本管理与回溯、导出 docx/pptx
 - **智能助教**（工单18）：多模态文档上传解析、公共/私有知识库、混合检索+重排、带引用的流式问答
 - **个性化学习推荐**（工单19）：知识图谱、学生画像、学习路径推荐、自适应练习、AIGC 错题本
-- ~~**面试 AI 复盘**（工单20）~~：Excel 批量导入、录音上传转写、LLM 复盘分析 —— **本期不做，设计存档，见第 8 节**
+- **虚拟教室 / 成课**（工单21，无需求原文）：教案 → 讲课视频（**核心管线在仓库外**）
+- **沉浸式助教台**（工单22，无需求原文）：问答页舞台化 + 数字人人设/闲聊 + 浏览器语音提问（**零新增路由**，但**改了既有接口契约与内部回答分支**——不是"纯前端"，见「工单 22」小节）
+- **班级学情闭环**（工单23，无需求原文，实施中）：学情回流给教师 + 备课跟着学情走
+- ~~**面试 AI 复盘**（工单20）~~：Excel 批量导入、录音上传转写、LLM 复盘分析 —— **不做，设计存档，见第 8 节**
 
 ### 阶段划分（**严格串行，前一阶段全部验收后才启动下一阶段**）
 
 - ~~**阶段一 = 当前唯一任务**：纯文本 Web 系统（"AI 教学大脑"），即工单 16→17→18→19（**工单 20 已移出本期**）。~~
   **✅ 已于 2026-09-17 完成并验收**（240 条 pytest 全绿、80/80 浏览器断言通过、验收截图落盘、DoD 五条齐活）。
 - ~~阶段二 = 数字人形象层：前端 2D 虚拟形象 + TTS + 音量驱动口型；数字人层抽象为可替换 provider（形象驱动 / TTS 各一个接口 + 一个本地实现）~~
-  **✅ 已于 2026-09-17 完成**（Edge-TTS + 纯代码 SVG 形象 + 音量驱动口型，43 条 pytest 全绿、14/14 浏览器断言通过；只挂智能助教问答页）。详见第 8 节末「阶段二」小节。
-- 阶段三 = 接入云端数字人 API（臻灵 / 讯飞虚拟人），理论上只改 provider 配置（新增一个 provider 实现 + 改 `.env` 的 `AVATAR_PROVIDER` / `TTS_PROVIDER`，问答页与舞台代码不动）
+  **✅ 已于 2026-09-17 完成**（Edge-TTS + 音量驱动口型，43 条 pytest 全绿、14/14 浏览器断言通过；只挂智能助教问答页）。详见第 8 节末「阶段二」小节。**形象库扩展（6 写实 + 1 Live2D）后续于 2026-09-18~20 交付**——卡通脸 `svg-face` 同日退役，见下一小节「阶段二增量 · 形象库扩展」。
+- **✅ 追加交付（16~19 与阶段二之后，不属上述串行链，均已完成）**：
+  - **工单 21 · 虚拟教室 / 成课**：把教案变成可播放的讲课视频（详见「工单 21」小节）
+  - **工单 22 · 沉浸式数字人助教台**：问答页重排为以数字人为主体的舞台 + 浏览器语音提问（详见「工单 22」小节）
+  - **工单 23 · 班级学情闭环**：学情回流给教师 + 备课跟着学情走（设计与计划已就位，**实施中**，见「工单 23」小节）
+- 阶段三 = 接入云端数字人 API（臻灵 / 讯飞虚拟人）：**TTS 一路只改 provider 配置**；**形象一路不是**——云端返回的是**视频流**（H.264/WebRTC）而非"照片 + 口型参数"，本地 `render` / `computePose` 契约装不下它。详见 `docs/讲解文档-平台说明.md` 6.1 节。
 - 阶段四 = 实时全双工教学对话（不在范围）
 
 > 阶段划分依据：`教育数字人竞品调研.md` 结论——形象层"已是成熟商品，不构成任何壁垒"，自研价值在教育层；市场唯一空缺是"实时视频对话 + **背后有真正的教学策略和学情闭环**"，其"背后"部分正是阶段一范围。
@@ -37,7 +46,7 @@
    ```
 3. **测试伴随**：每个功能模块同步编写 pytest 用例（`backend/tests/pytest_工单XX_功能.py`），完成的定义 = 功能可演示 + 测试全绿。
 4. **小步提交**：每完成一个接口/页面执行 `git commit -m "[工单XX] 简述"`。
-   ⚠️ **前置动作**：本仓库当前**尚未 `git init`**。首次开发前必须先 `git init`，并**先创建 `.gitignore` 再首次 commit**（见第 5 条）。
+   ~~⚠️ **前置动作**：本仓库当前**尚未 `git init`**……~~ —— **本条已完成**（v1.6 勘误 2026-09-27）：仓库早已初始化并有完整提交历史。**只做本地 commit，不 push**（gitee 与 GitHub 都不推，用户拍板）。
 5. **密钥只进 .env**：任何 API Key 不写入代码、不进 git；`.gitignore` 必须先于首次 commit 创建，至少包含 `.env`、`data/`、`uploads/`、`__pycache__/`、`node_modules/`、`dist/`。
 
 ## 3. 技术栈（钉死，未经用户明确同意不得更换）
@@ -54,10 +63,10 @@
 | ASR | faster-whisper，模型固定 `small` + int8 量化，纯 CPU（**随工单 20 移出本期，本期不安装**；将来启用时按此行选型） |
 | 导出 | python-docx（教案/习题/试题）、python-pptx（课件） |
 | TTS（阶段二） | **edge-tts**（微软 Edge 免费语音服务，纯 Python、无 Key、**需联网**）；结果落盘缓存，重复语句离线可播 |
-| 数字人形象（阶段二） | **前端纯代码内联 SVG** + Web Audio API（`AnalyserNode` 读音量驱动口型），**零 GPU、零素材** |
+| 数字人形象（阶段二） | **前端渲染器** + Web Audio API（`AnalyserNode` 读音量驱动口型），**零 GPU**。现为 `photo`（写实照片 talking-photo，全像素 warp）/ `live2d`（WebGL）；~~`svg-face` 卡通脸~~ 已于 2026-09-18 退役。详见「阶段二增量 · 形象库扩展」 |
 | 测试 | pytest + httpx（FastAPI TestClient）；阶段二起 `asyncio_mode="auto"` |
 
-> 阶段三才会引入：云端数字人 API（臻灵 / 讯飞虚拟人）。**通过 provider 接口替换，不改业务代码。**
+> 阶段三才会引入：云端数字人 API（臻灵 / 讯飞虚拟人）。**TTS 一路确为「换 provider 不改业务代码」；形象一路不是**——云端返回视频流，本地 `render`/`computePose` 契约装不下，需改舞台壳。见第 1 节阶段三与 `docs/讲解文档-平台说明.md` 6.1。
 
 ## 4. 目录结构（按此创建，新文件放对位置）
 
@@ -76,22 +85,22 @@ Education-agent/
 │   │   ├── db.py              ← engine/Session
 │   │   ├── auth.py            ← JWT 签发/校验 + 角色依赖注入（阶段一共用）
 │   │   ├── models/            ← SQLAlchemy 模型（按工单分文件，user.py 共用）
-│   │   ├── schemas/           ← Pydantic 模型
-│   │   ├── api/               ← 路由：auth/ lesson/ assistant/ learn/ interview/ tts/〔阶段二〕
-│   │   └── services/          ← 业务逻辑；llm_client.py / rag.py / tts.py〔阶段二〕统一封装
+│   │   ├── schemas/           ← Pydantic 模型（注意：工单21 的请求模型内联在 api/lecture.py，未单独建文件）
+│   │   ├── api/               ← 路由：auth/ lesson/ kb/ assistant/ learn/ lecture/〔21〕tts/〔阶段二〕 + teach.py〔23 待建〕
+│   │   └── services/          ← 业务逻辑；llm_client.py / prompts.py / retriever.py / tts.py〔阶段二〕/ avatar_persona.py〔22〕 + class_profile.py〔23 待建〕
 │   ├── tests/                 ← pytest，文件名 pytest_工单XX_功能.py（阶段二用 pytest_阶段二_数字人.py）
 │   ├── scripts/               ← capture_evidence.py（浏览器取证）等
 │   └── requirements.txt
 ├── frontend/
 │   └── src/
-│       ├── api/               ← axios 实例与各模块 api（含 tts.js〔阶段二〕）
-│       ├── audio/             ← 〔阶段二〕sentenceSplitter.js（切句）/ speechQueue.js（合成队列 + 音量分析）
-│       ├── avatar/            ← 〔阶段二〕provider.js（形象驱动 provider）
-│       ├── views/lesson/ assistant/ learn/ interview/
-│       ├── router/  store/  components/   ← components 含 AvatarStage.vue〔阶段二〕
-│       └── App.vue            ← 侧边栏导航四模块
+│       ├── api/               ← axios 实例与各模块 api（含 tts.js〔阶段二〕/ lecture.js〔21〕）
+│       ├── audio/             ← 〔阶段二〕sentenceSplitter.js（切句）/ speechQueue.js（合成队列 + 音量分析）/ asr.js〔22 浏览器语音识别〕
+│       ├── avatar/            ← 〔阶段二〕provider.js（形象驱动 provider）/ faces.js（形象库清单）
+│       ├── views/lesson/ assistant/ learn/ lecture/〔21〕teach/〔23〕
+│       ├── router/  store/  components/   ← components 含 AvatarPhotoCanvas.vue/AvatarLive2D.vue〔形象库〕与 AvatarSpotlight.vue〔22 舞台壳〕
+│       └── App.vue            ← 侧边栏导航（按角色隐藏教师/学生专属项）
 ├── data/                      ← SQLite + Chroma + tts_cache 持久化（gitignore）
-└── uploads/                   ← 上传文档与录音（gitignore）
+└── uploads/                   ← 上传文档与录音（gitignore；含 uploads/lectures/〔21 成课产物〕）
 ```
 
 ## 5. 算力策略（无 GPU，本地只跑业务逻辑）
@@ -102,7 +111,7 @@ Education-agent/
 | Embedding | 云端 API（.env：EMBEDDING_PROVIDER=api）；离线兜底本地 bge-small-zh-v1.5 |
 | 重排序 | 云端 API；开发期 RERANK_ENABLED=false 先跳过，验收前开启 |
 | ASR 转写 | 本地 faster-whisper small + int8（14 核 CPU 接近实时，够用）——**随工单20 移出本期，不安装** |
-| 数字人渲染 | ✅ 阶段二已做：前端 2D 形象（纯代码 SVG）+ **Edge-TTS** + 音量驱动口型，**全程零 GPU** |
+| 数字人渲染 | ✅ 阶段二已做：前端 2D 形象（写实照片 / Live2D）+ **Edge-TTS** + 音量驱动口型，**全程零 GPU**。⚠️ 工单21 的**成课**是另一条路——它跑的是仓库外 wav2lip 管线（CPU 可跑，但需 ~400MB 权重，不入库） |
 
 所有模型名、base_url、开关全部走 .env，代码中不得硬编码。
 
@@ -270,7 +279,7 @@ UPLOAD_DIR=./uploads
 
 沿用仓库既有的**函数式 provider 范式**（见 `services/embedding.py`）：具名实现 + 字符串开关 + 查找函数 + 未知值回退告警，**不引入 Protocol / ABC / 工厂**。
 
-**新增文件**：后端 `services/tts.py`、`api/tts.py`（`GET /api/tts/config`、`GET /api/tts/voices`、`POST /api/tts/speak` 返回音频字节流，**不包 `ApiResponse`**）；前端 `api/tts.js`、`audio/sentenceSplitter.js`、`audio/speechQueue.js`、`avatar/provider.js`、`components/AvatarStage.vue`、`store/avatar.js`。**挂载位置仅智能助教问答页 `Chat.vue`**，不动 `api/assistant.py` 的 SSE 契约。
+**新增文件**：后端 `services/tts.py`、`api/tts.py`（`GET /api/tts/config`、`GET /api/tts/voices`、`POST /api/tts/speak` 返回音频字节流，**不包 `ApiResponse`**）；前端 `api/tts.js`、`audio/sentenceSplitter.js`、`audio/speechQueue.js`、`avatar/provider.js`、`store/avatar.js`，**以及 `components/AvatarStage.vue`（该文件已于 2026-09-18 删除，其位置现由工单 22 的 `components/AvatarSpotlight.vue` 承担——见「工单 22」小节）**。**挂载位置仅智能助教问答页 `Chat.vue`**，不动 `api/assistant.py` 的 SSE 契约。
 
 **四条职责边界（改代码前先读）**：
 
@@ -281,7 +290,52 @@ UPLOAD_DIR=./uploads
 
 **验收**：43 条 pytest 全绿（**绝不真联网**，monkeypatch 掉合成实现）+ `capture_evidence.py` 的 avatar 场景 14/14 断言。关键两条断言是「音量峰值 > 0」「发声期间口型形状种类数 > 5」——**证明口型确由音频驱动，而不是按固定节奏播放的假动画**。
 
-**阶段三怎么接**：新增一个 provider 实现并在模块里登记，改 `.env` 的 `AVATAR_PROVIDER` / `TTS_PROVIDER`，问答页与舞台代码不动。
+**阶段三怎么接**：新增一个 provider 实现并在模块里登记，改 `.env` 的 `AVATAR_PROVIDER` / `TTS_PROVIDER`。
+
+⚠️ **勘误（v1.6，2026-09-27）**：本句原结尾是"**问答页与舞台代码不动**"——**TTS 一路成立**（语音乐是音频流，`synthesize()` 契约可复用），**形象一路不成立**：云端数字人 API 返回的是**视频流**（H.264 / WebRTC），本地 `render` / `computePose` 契约装不下它。准确接法与工作量评估见 `docs/讲解文档-平台说明.md` 6.1 节。
+
+### 阶段二增量 · 形象库扩展〔2026-09-18~20 交付〕
+
+阶段二原本只有 `svg-face` 一个纯代码卡通脸。本次扩为**形象库**：`avatar/faces.js` 定义 6 位写实形象 + 1 位 Live2D，设置弹层可切换、即时生效、落 `localStorage`。
+
+| 档位 | 实现 | 说明 |
+| --- | --- | --- |
+| 写实照片（6 位） | `components/AvatarPhotoCanvas.vue` | talking-photo：照片 + **全像素 warp** 口型（2026-09-18 由 v2 几何形变重写为 v3 全像素）；png 素材在 `frontend/src/assets/avatar/`，共约 14MB |
+| Live2D（小满） | `components/AvatarLive2D.vue` | WebGL 渲染（`pixi-live2d-display` + Cubism2 core），**懒加载**；**不参与工单21 成课**（无对应人像素材与口型驱动） |
+
+> ⚠️ **撞号提醒**：这 5 个文件（`faces.js` / `provider.js` / `store/avatar.js` / `AvatarPhotoCanvas.vue` / `AvatarLive2D.vue`）的文件头标 `[工单20]`，`docs/evidence/工单20/` 装的也是形象库截图——但 **`工单20` 在本文档其余位置的语义是"面试 AI 复盘"**（见「工单 20」小节）。一号两用，**尚未统一**（改名会牵动文件头与已交付的证据路径，需单独拍板）。顺着 `[工单20]` 找需求会找到另一件事。
+
+### 工单 21 · 虚拟教室 / 成课〔**无需求原文**，2026-09-20~22 交付〕
+
+把工单 17 的教案/课件变成**可直接播放的讲课视频**。**代码在 `backend/app/api/lecture.py` + `frontend/src/views/lecture/Room.vue`，但核心算力在仓库外**。
+
+- **链路**：`/lecture/draft`（切页 + 剥 Markdown）→ 教师编辑 → `/lecture/generate`（落 `spec.json` 起子进程）→ 仓库外 `C:/Users/23772/sx/wav2lip/gen_lecture.py`（逐段 edge-tts + Wav2Lip 对口型 + ffmpeg concat）→ `compose_studio.py` 合成 1920×1080 演播室版式 → `/api/lecture/media` 静态下发 → 前端 `timeupdate` 驱动翻页 + 字幕。
+- **无新表、无 service 文件**：编排内联在路由里；任务状态在**内存 `_JOBS`**（进程重启即丢）；配置以 JSON 落盘。
+- **四条接口**：`POST /draft`、`POST /generate`、`GET /jobs/{job_id}`（以上 teacher）、`GET /courses`（登录用户），外加 `/api/lecture/media` 静态挂载（**无鉴权**）。
+- **三条技术债**（改这块前先看）：① `WAV2LIP_DIR` / `PYTHON` **硬编码**，未走 `.env`；② `_JOBS` 内存态；③ media 挂载无鉴权。
+- 验收：`pytest_工单21_虚拟教室.py` 9 条（**管线被 mock**）+ `stage_lecture_room` 5 条断言 / 3 张截图。
+
+### 工单 22 · 沉浸式数字人助教台〔**无需求原文**，2026-09-21~22 交付〕
+
+把问答页从"数字人是第三块并列元素"重排为**以数字人为主体的舞台**，并给数字人配上人设与语音提问。
+
+- **25-75 双栏**：左 `.desk-side` 会话列表 + 检索设置（下沉到底部）；右 `.desk-stage` = `AvatarSpotlight` 舞台（占高 80%）+ 悬浮输入条 + 引用抽屉。旧 `.chat-layout` 系列类名**全仓零命中**（整体替换，无开关）。
+- **语音提问**：`audio/asr.js` 封装 **浏览器 Web Speech API**（`continuous=false` + `interimResults=true`，final 到手即 `stop()` 并自动发送）。**与服务端 ASR 是两条互不相干的路**——`faster-whisper` 仍不装。
+- **状态胶囊**：待命中 / **倾听中**（注意不是"聆听中"）/ 思考中 / 回复中。
+- ⚠️ **勘误（v1.6）**：原写"纯前端、零后端改动、SSE 契约逐字未改"——**不成立**。准确口径是：**零新增路由、零新增表**，但实际改了 16 个文件（后端 6 个）：
+  - `ChatRequest` 加**可选** `avatar_id`；`api/assistant.py` 新增**闲聊短路分支**（`avatar_persona.is_smalltalk()` 为真则**跳过检索**，走 `_SYSTEM_CHITCHAT` 按人设应答）——解决"问'介绍一下你自己'却回'知识库中未找到依据'"；
+  - `POST /api/tts/speak` 加形象级 `rate`/`pitch`（**白名单正则防 prosody 注入**，`pitch` 空串不传否则断流）；
+  - **SSE 事件结构**（`sources/delta/done/error`）确实未改。
+- 验收分两半，**界线要清楚**：**后端有人设/短路的 8 条用例**（挂在 `pytest_工单18_智能助教.py` 的 `TestAvatarPersonaAndSmalltalk`，**不在本工单名下**——这是"工单 22 无测试"印象的成因）+ 2 条在 `pytest_阶段二_数字人.py`；**前端无任何自动化验证**，只有 `stage_desk_layout` 6 条**布局类**断言 + 3 张截图。**"倾听中"是人工演示项**（无头浏览器拿不到麦克风），不要把前端半边算作已机器验证。
+
+### 工单 23 · 班级学情闭环〔v1.5 设计 / **实施中**〕
+
+**一句话**：学情回流给教师（班级实体 + 教师学情看板）+ 备课跟着学情走（生成时注入本班学情）。
+**闭环**：学生答题 → `attempts` → 画像 → 班级聚合 → 注入备课 Prompt → 教案 →（零改动）`/lecture/draft` → 数字人讲课。
+
+- 设计与接口见 `docs/设计文档-工单16.md` **2.2 场景五 / 3.2.2 第(5)组 / 3.2.8**；实施计划见 `docs/superpowers/plans/2026-09-27-班级学情闭环.md`。
+- **两条口径铁律**：① 聚合用 **mean-of-means**（先按学生平均、再按人平均），**不是** pooled；② 覆盖率必须随聚合返回（`student_count` / `class_size`）——"42%" 若只来自 30 人中的 1 人，**误导比没有更糟**。
+- **明确不做**：学生看自己在班里的位次（只给聚合、不给个体排名）；Embedding 向量化画像；平台浏览埋点。
 
 ## 9. Windows 与工程红线
 
@@ -302,8 +356,14 @@ UPLOAD_DIR=./uploads
 4. git 提交记录带 `[工单XX]` 前缀
 5. `docs/evidence/工单XX/` 有截图或录屏
 
-## 11. 已知缺口（待用户补充，不影响阶段一开工）
+## 11. 已知缺口与技术债
 
 1. **《教学场景智能体设计.pdf》不在仓库中**——工单 17/18/19 均以"根据《教学场景智能体设计.pdf》中的各个核心模块的流程梳理"为依据，但该附件缺失。目前以工单原文正文为准；用户提供后需回补核对。
 2. ~~**sentence-transformers 当前不可用**~~ —— **已于 2026-09-17（工单18 期间）修复**：根因是 conda 版 scipy/sklearn/pandas 是针对 numpy 1.x 编译的，与 numpy 2.5.x 冲突；已用 pip 升到 numpy 2 版轮子（`scipy 1.18.1` / `scikit-learn 1.9.1` / `pandas 3.0.5`）。本地兜底 Embedding 现可正常使用（`EMBEDDING_PROVIDER=local`，bge-small-zh-v1.5，CPU），实现改为 `transformers` + `torch` 手写 CLS 池化以避开 sklearn 依赖链。踩坑记录见 `docs/进度记录.md` 第八节。
-3. ~~**faster-whisper 未安装**，工单 20 开工前需安装。~~ —— **本项随工单 20 移出而作废**（v1.2）：**本期不需要安装 faster-whisper**（阶段一已无音频消费方）。将来若重启工单 20，再按第 3 节选型安装。
+3. ~~**faster-whisper 未安装**，工单 20 开工前需安装。~~ —— **本项随工单 20 移出而作废**（v1.2）：**不需要安装 faster-whisper**（已无服务端音频消费方）。将来若重启工单 20，再按第 3 节选型安装。**注意别与工单 22 混淆**：工单 22 的语音提问走浏览器 Web Speech API，零后端。
+4. **工单 21 的成课管线不在仓库内**（v1.6 新增）：`gen_lecture.py` / `compose_studio.py` + ~400MB 权重位于 `C:/Users/23772/sx/wav2lip/`，**换机部署即成课不可用**（返回 503）。仓库**不自包含**，演示前须确认该目录在。
+5. **`WAV2LIP_DIR` / `PYTHON` 硬编码**（v1.6 新增）：在 `backend/app/api/lecture.py`，违反第 5 节"代码中不得硬编码"。修法是移入 `.env`（如 `LECTURE_PIPELINE_DIR` / `LECTURE_PYTHON`）——**改动会牵动成课链路，需单独回归**，故尚未执行。
+6. **`[工单20]` 一号两用**（v1.6 新增）：形象库的 5 个前端文件头与 `docs/evidence/工单20/` 用的是"工单20=形象库"，与第 8 节"工单 20 = 面试 AI 复盘"**撞号**。**未统一**——改名牵动文件头与已交付证据路径，需单独拍板。
+7. **工单 22 的前端半边无自动化验证**（v1.6 新增）：后端 8+2 条 pytest **挂在别的测试文件里**（`pytest_工单18_智能助教.py` / `pytest_阶段二_数字人.py`），**没有自己的测试文件**；前端只有布局类浏览器断言。"倾听中"状态是**人工演示项**（无头浏览器拿不到麦克风），**不要把它算作已机器验证**。
+8. **`/api/lecture/media` 静态挂载无鉴权**（v1.6 新增）：`app.mount` 绕过 `Depends`。当前按"校内公开课件"对待；若课程内容含学情，须改带鉴权的 `FileResponse`。
+9. **仓库无前端单测框架**（v1.6 新增）：`frontend/package.json` 无 vitest/jest，前端正确性只能靠 `npm run build` + `capture_evidence.py` 兜底——**这正是工单 22/23 的前端无法机器验证的根本原因**。
