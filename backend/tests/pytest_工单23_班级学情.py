@@ -14,7 +14,7 @@ from app.db import SessionLocal
 from app.models.learn import Attempt, KnowledgePoint, Question
 from app.models.teach import Class, ClassMember
 from app.models.user import ROLE_STUDENT, ROLE_TEACHER, User
-from app.services import class_profile, learn_profile
+from app.services import class_profile, learn_profile, llm_client, prompts
 
 # 本文件专属课程名。知识点用课程名与工单19 用例的图谱隔开，
 # 两边断言互不干扰（唯一约束是 (course, name)，不同课程不会撞）
@@ -451,3 +451,166 @@ def test_insight_returns_structured_and_rendered(client, teacher_token, student_
     # 学生无权访问看板
     resp = client.get(f"/api/teach/classes/{class_id}/insight", headers=auth(student_token))
     assert resp.status_code == 403
+
+
+# ------------------------------------------------------------------ Task 5
+
+# 词表：出现任何一个都说明学情泄漏进了不该有的提示词里。
+# **不含「不得编造」**——那句防幻觉约束在**两个分支都有**（未绑班级时同样要拦住
+# 模型自己编人数），把它放进词表会让本用例对着正常输出报假警。词表只收
+# "只有拿到学情才可能出现的词"。（已核对：这几个词在当前 prompts.py 中一个都没有。）
+_ANALYTICS_WORDS = ("本班学情", "薄弱知识点", "掌握度", "覆盖率", "难度配比")
+
+
+def test_prompt_has_no_analytics_when_class_id_absent(client):
+    """class_id 为空 → 提示词中不得出现任何学情字样（词表断言，不是"看起来没有"）。"""
+    messages = prompts.build_messages(
+        "教案",
+        subject="人工智能",
+        course_name="人工智能导论",
+        chapter="第三章",
+        knowledge_points=["反向传播"],
+        difficulty="中等",
+        objectives=[],
+    )
+    text = "".join(message["content"] for message in messages)
+    leaked = [word for word in _ANALYTICS_WORDS if word in text]
+    assert not leaked, f"未绑班级却出现了学情字样：{leaked}"
+
+
+def test_prompt_injects_analytics_when_class_id_present(client, kps):
+    """class_id 非空 → 提示词含学情段，且数字与 /insight 一致（不是"含某句话"这种弱断言）。"""
+    klass = _make_class("注入班")
+    sids = _new_students(3)
+    kp_id = kps["基础概念"]
+    _add_members(klass, sids)
+    for _ in range(3):
+        _answer(sids[0], kp_id, correct=False)
+
+    with SessionLocal() as db:
+        brief = class_profile.build_analytics_brief(db, klass)
+    assert brief is not None
+
+    messages = prompts.build_messages(
+        "教案",
+        subject="人工智能",
+        course_name="人工智能导论",
+        chapter="第三章",
+        knowledge_points=["反向传播"],
+        difficulty="中等",
+        objectives=[],
+        profile_context=brief,
+    )
+    text = "".join(message["content"] for message in messages)
+    assert "本班学情" in text
+    assert "3 人中 1 人" in text, "分母必须原样出现在提示词里"
+    # 教案模板的分支应已切到"引用具体数字"
+    assert "引用具体数字" in text
+    assert "结合高职学生的知识基础与常见认知障碍简要分析" not in text
+
+
+def test_lesson_template_falls_back_without_analytics(client):
+    """未带学情时教案模板退回原表述——不得出现"要求依据下方数据、下方却没有数据"。"""
+    messages = prompts.build_messages(
+        "教案",
+        subject=None,
+        course_name="人工智能导论",
+        chapter=None,
+        knowledge_points=[],
+        difficulty=None,
+        objectives=[],
+    )
+    text = messages[1]["content"]
+    assert "结合高职学生的知识基础与常见认知障碍简要分析" in text
+    assert "引用具体数字" not in text
+
+
+def test_generate_endpoint_injects_class_analytics(client, teacher_token, auth, monkeypatch, kps):
+    """走 HTTP 确认 class_id 真的被转换成提示词里的学情段。
+
+    不真调 LLM：monkeypatch 掉 chat_stream，把收到的 messages 截下来。
+
+    **班级必须经 HTTP 建成，不能用 `_make_class`**：后者把班挂在本文件自建的
+    `teacher_23` 名下，而这里的请求是以 `teacher_zhang` 发出的——注入逻辑会
+    按设计静默忽略"非本班"。用 `_make_class` 会让这条用例验的是忽略分支。
+    """
+    resp = client.post(
+        "/api/teach/classes",
+        json={"name": "端到端班", "course_name": "人工智能导论"},
+        headers=auth(teacher_token),
+    )
+    assert resp.status_code == 200, resp.text
+    klass = resp.json()["data"]["id"]
+
+    sids = _new_students(2)
+    kp_id = kps["基础概念"]
+    _add_members(klass, sids)
+    _answer(sids[0], kp_id, correct=False)
+
+    captured: dict = {}
+
+    async def fake_stream(messages, **kwargs):
+        captured["messages"] = messages
+        yield "## 一、教学目标\n（测试桩产出）"
+
+    monkeypatch.setattr(llm_client, "chat_stream", fake_stream)
+
+    resp = client.post(
+        "/api/lesson/generate",
+        json={
+            "content_type": "教案",
+            "course_name": "人工智能导论",
+            "subject": "人工智能",
+            "knowledge_points": ["反向传播"],
+            "class_id": klass,
+        },
+        headers=auth(teacher_token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured.get("messages"), "chat_stream 应已被调用"
+    text = "".join(m["content"] for m in captured["messages"])
+    assert "本班学情" in text
+    assert "2 人中 1 人" in text
+
+
+def test_generate_ignores_class_id_of_other_teacher(
+    client, teacher_token, other_teacher_token, auth, monkeypatch, kps
+):
+    """拿别班的 class_id 生成：**不报错、也不注入**（静默忽略）。
+
+    这条守的是 `api/lesson.py` 里那段"非本班一律忽略"的分支。它的存在理由
+    是"生成是主流程，不能因为一个失效 id 整个失败"——若哪天被改成抛 403/
+    500，或反过来把别班学情注了进去，这里会挂。
+    """
+    resp = client.post(
+        "/api/teach/classes",
+        json={"name": "别班", "course_name": "人工智能导论"},
+        headers=auth(other_teacher_token),
+    )
+    other_class = resp.json()["data"]["id"]
+    sids = _new_students(2)
+    kp_id = kps["基础概念"]
+    _add_members(other_class, sids)
+    _answer(sids[0], kp_id, correct=False)
+
+    captured: dict = {}
+
+    async def fake_stream(messages, **kwargs):
+        captured["messages"] = messages
+        yield "## 一、教学目标\n（测试桩产出）"
+
+    monkeypatch.setattr(llm_client, "chat_stream", fake_stream)
+
+    resp = client.post(
+        "/api/lesson/generate",
+        json={
+            "content_type": "教案",
+            "course_name": "人工智能导论",
+            "class_id": other_class,   # 别班的 id
+        },
+        headers=auth(teacher_token),
+    )
+    assert resp.status_code == 200, resp.text
+    text = "".join(m["content"] for m in captured["messages"])
+    assert "本班学情" not in text, "别班学情不得注入"
+    assert "别班" not in text, "连班级名都不该出现"

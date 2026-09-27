@@ -1,4 +1,5 @@
 # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 智能备课接口
+# [工单23] 人工智能NLP-Agent数字人项目-教育智能体-班级学情闭环 —— 生成时按 class_id 注入班级学情
 """智能备课接口：SSE 流式生成、列表/详情、编辑保存、版本管理与回滚、导出、资源检索。
 
 需求见工单17：教案/课件/习题/案例/试题自动生成 → 在线编辑 → 资源检索引用 → 多格式导出 → 版本回溯。
@@ -27,6 +28,7 @@ from app.models.lesson import (
     Resource,
     TeachingPlan,
 )
+from app.models.teach import Class
 from app.models.user import User
 from app.schemas.common import ApiResponse
 from app.schemas.lesson import (
@@ -40,7 +42,7 @@ from app.schemas.lesson import (
     loads_or_none,
     plan_to_detail,
 )
-from app.services import exporter, llm_client, prompts
+from app.services import class_profile, exporter, llm_client, prompts
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,7 @@ def _save_questions(db: Session, plan: TeachingPlan, items: list[dict], is_exam:
 async def generate(
     payload: GenerateRequest,
     user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
 ) -> StreamingResponse:
     """流式生成教案/课件/习题/案例/试题。
 
@@ -122,6 +125,17 @@ async def generate(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    # 工单23：绑了班级才注入学情。**非本班/不存在的班一律静默忽略**——
+    # 生成是主流程，不能因为一个失效的 class_id 就整个失败；教师看到的学情卡
+    # 已经渲染过同一份数据，注入与否是可核对的
+    profile_context = None
+    if payload.class_id:
+        own = db.scalar(
+            select(Class).where(Class.id == payload.class_id, Class.teacher_id == user.id)
+        )
+        if own is not None:
+            profile_context = class_profile.build_analytics_brief(db, own.id)
+
     messages = prompts.build_messages(
         content_type,
         subject=payload.subject,
@@ -131,6 +145,7 @@ async def generate(
         difficulty=payload.difficulty,
         objectives=payload.objectives,
         extra=payload.extra,
+        profile_context=profile_context,
     )
     title = _make_title(payload)
     owner_id = user.id

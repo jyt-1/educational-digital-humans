@@ -23,6 +23,9 @@ class GenerateRequest(BaseModel):
     difficulty: str | None = Field(default=None, max_length=16, description="难度：简单|中等|困难")
     objectives: list[str] = Field(default_factory=list, description="教学目标列表")
     extra: str | None = Field(default=None, max_length=500, description="补充要求")
+    class_id: int | None = Field(
+        default=None, description="绑定班级（可选）。非空时把该班学情注入生成提示词"
+    )
 
     def validate_type(self) -> str:
         if self.content_type not in CONTENT_TYPES:

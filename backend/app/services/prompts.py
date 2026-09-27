@@ -1,4 +1,5 @@
 # [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 备课 Prompt 模板
+# [工单23] 人工智能NLP-Agent数字人项目-教育智能体-班级学情闭环 —— 同文件加学情注入点与教案学情分析分支
 # [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— 追加 AIGC 错题分析 Prompt（3.2.7）
 """五类备课内容（教案/课件/习题/案例/试题）的 Prompt 构造 + 错题分析 Prompt。
 
@@ -56,8 +57,14 @@ def _common_context(
     knowledge_points: list[str],
     difficulty: str | None,
     objectives: list[str],
+    profile_context: str | None = None,
 ) -> str:
-    """拼装各类型共用的课程上下文。"""
+    """拼装各类型共用的课程上下文。
+
+    `profile_context` 是**工单23 的班级学情注入点，也是唯一注入点**（五种内容类型共用）：
+    传进来的是 `class_profile.build_analytics_brief()` 渲染好的**文字**，不是结构化数据。
+    为空时本函数行为与工单19 完全一致。
+    """
     lines = [f"学科/专业：{subject or '人工智能'}", f"课程名称：{course_name}"]
     if chapter:
         lines.append(f"章节：{chapter}")
@@ -67,6 +74,8 @@ def _common_context(
         lines.append(f"难度要求：{difficulty}")
     if objectives:
         lines.append(f"教学目标：{'；'.join(objectives)}")
+    if profile_context:
+        lines += ["", profile_context]
     return "\n".join(lines)
 
 
@@ -80,22 +89,38 @@ def build_messages(
     difficulty: str | None,
     objectives: list[str],
     extra: str | None = None,
+    profile_context: str | None = None,
 ) -> list[dict]:
-    """根据内容类型构造 messages。extra 为用户自定义补充要求。"""
+    """根据内容类型构造 messages。
+
+    `profile_context`（工单23）：班级学情文字。**为空时输出与工单19 时的行为逐字一致**
+    ——这是"教师以为关掉了学情注入、教案里其实还带着"这一静默偏差的防线，有用例守着。
+    """
     if content_type not in CONTENT_TYPES:
         raise ValueError(f"不支持的内容类型：{content_type}，可选 {'/'.join(CONTENT_TYPES)}")
 
     context = _common_context(
-        subject, course_name, chapter, knowledge_points, difficulty, objectives
+        subject, course_name, chapter, knowledge_points, difficulty, objectives,
+        profile_context,
     )
     if extra:
         context += f"\n补充要求：{extra}"
+
+    # 教案「三、学情分析」的写作指令随学情有无切换。两个分支必须互斥：
+    # 若在无数据时仍要求"依据下方数据"，提示词就自相矛盾了
+    learn_analysis_hint = (
+        "依据上方【本班学情】中的真实数据撰写，**引用具体数字**说明本班薄弱点及对策。"
+        "数据中没有的知识点、人数、比例一律不得出现。"
+        if profile_context
+        else _FALLBACK_LEARN_ANALYSIS
+    )
 
     # 五个模板共用一次 format：非题目类模板不含 spec 占位符，多余的关键字参数会被忽略
     user_prompt = _USER_TEMPLATES[content_type].format(
         context=context,
         exercise_spec=_spec_line(DEFAULT_EXERCISE_SPEC),
         exam_spec=_spec_line(DEFAULT_EXAM_SPEC),
+        learn_analysis_hint=learn_analysis_hint,
     )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -104,6 +129,14 @@ def build_messages(
 
 
 # ---------------------------------------------------------------- 各类型模板
+
+# 无班级学情时的学情分析写法。刻意把"不得编造具体人数/百分比"写进来：
+# 原先只说"结合高职学生的知识基础简要分析"，模型会顺手编出"本班约 30% 学生……"
+# 这类无从核实的数字——恰恰是这个功能要消灭的东西
+_FALLBACK_LEARN_ANALYSIS = (
+    "结合高职学生的知识基础与常见认知障碍简要分析。"
+    "本课未绑定班级，无真实学情数据，**不得编造具体人数、百分比或班级名称**。"
+)
 
 _TEMPLATE_LESSON_PLAN = """请为以下课程编写一份完整、可直接使用的**教案**。
 
@@ -115,7 +148,7 @@ _TEMPLATE_LESSON_PLAN = """请为以下课程编写一份完整、可直接使�
 ## 二、教学重点与难点
 分别说明，并简述突破难点的思路。
 ## 三、学情分析
-结合高职学生的知识基础与常见认知障碍简要分析。
+{learn_analysis_hint}
 ## 四、教学准备
 所需教具、软件环境、实训资源。
 ## 五、教学过程
