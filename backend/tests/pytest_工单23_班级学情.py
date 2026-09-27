@@ -14,6 +14,7 @@ from app.db import SessionLocal
 from app.models.learn import Attempt, KnowledgePoint, Question
 from app.models.teach import Class, ClassMember
 from app.models.user import ROLE_STUDENT, ROLE_TEACHER, User
+from app.services import learn_profile
 
 # 本文件专属课程名。知识点用课程名与工单19 用例的图谱隔开，
 # 两边断言互不干扰（唯一约束是 (course, name)，不同课程不会撞）
@@ -189,3 +190,41 @@ def test_class_member_cascade(client):
         db.commit()
         left = db.scalar(select(ClassMember).where(ClassMember.class_id == class_id))
         assert left is None
+
+
+# ------------------------------------------------------------------ Task 2
+
+
+def test_compute_keeps_student_dimension(client, kps):
+    """内核必须按学生分组返回——这是 mean-of-means 的前提。
+
+    若哪天有人把内核改回"一组学生一个合计"，这条会挂。
+    """
+    sid_a, sid_b = _new_students(2)
+    kp_id = kps["基础概念"]
+    _answer(sid_a, kp_id, correct=True)          # A 只答 1 题且对
+    for _ in range(9):
+        _answer(sid_b, kp_id, correct=False)     # B 答 9 题全错
+
+    with SessionLocal() as db:
+        grouped = learn_profile._compute(db, [sid_a, sid_b])
+
+    assert kp_id in grouped, "该知识点应出现在结果里"
+    assert set(grouped[kp_id]) == {sid_a, sid_b}, "两个学生都必须各自留一层"
+    assert grouped[kp_id][sid_a].mastery == pytest.approx(1.0)
+    assert grouped[kp_id][sid_b].mastery == pytest.approx(0.0)
+
+
+def test_compute_mastery_unchanged_for_single_student(client, kps):
+    """单生入口行为不变：仍是 dict[kp_id, MasteryRecord]。"""
+    sid = _new_students(1)[0]
+    kp_id = kps["基础概念"]
+    _answer(sid, kp_id, correct=True)
+
+    with SessionLocal() as db:
+        result = learn_profile.compute_mastery(db, sid)
+
+    assert isinstance(result[kp_id], learn_profile.MasteryRecord)
+    assert result[kp_id].kp_id == kp_id
+    assert result[kp_id].mastery == pytest.approx(1.0)
+    assert result[kp_id].attempt_count >= 1

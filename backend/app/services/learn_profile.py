@@ -1,4 +1,5 @@
 # [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— 学习画像、路径推荐与自适应难度
+# [工单23] 人工智能NLP-Agent数字人项目-教育智能体-班级学情闭环 —— 同文件抽出 _compute 聚合内核（保留学生维度）
 """工单19 的三块核心算法（设计文档 2.2 场景三、4.3）。
 
 **画像的权威来源是实时计算**（设计文档 3.3.3 写死）：读 `attempts` ∪ `score_imports`
@@ -20,6 +21,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -123,61 +125,102 @@ def _placeholder_ids(db: Session) -> set[int]:
     return set(rows)
 
 
-def compute_mastery(db: Session, student_id: int) -> dict[int, MasteryRecord]:
-    """实时计算画像：`正确 × 时间衰减权重` 的加权平均（设计文档 4.3）。
+def _compute(
+    db: Session, student_ids: Iterable[int]
+) -> dict[int, dict[int, MasteryRecord]]:
+    """**聚合内核**：一次取一组学生的原始行，按 `kp_id → student_id` 分组返回。
 
-    数据源两路，粒度不同但都归一到 [0,1]：`attempts`（单题级，对/错 → 1/0）、
-    `score_imports`（知识点级，得分/满分）。历史成绩不写进 `attempts` 的原因见 3.3.3。
+    返回结构比"一个知识点一个值"多一层 `student_id`，不是设计冗余——班级掌握度
+    要求 mean-of-means（先算每个学生、再对全班取平均），而"每人一票"必须能同时
+    看到每个学生各自的值。若这里按知识点汇总掉，上层就只能算出 pooled（混算），
+    答得多的人会主导班级数字（设计文档 3.2.8 第(1)(2)条）。
+
+    这一层维度同时是覆盖率 `student_count` 的天然来源：数一数某个 `kp_id` 下
+    有几个学生即可，不必再查一遍库。
+
+    仍然只有两条 SQL，时间衰减**只在 Python 侧算**——`time_weight` 是分段函数，
+    复制进 SQL 就有了第二个真相源（那里有用例守着）。
     """
+    ids = list(student_ids)
+    if not ids:
+        return {}
+
     placeholders = _placeholder_ids(db)
-
-    weighted: dict[int, float] = {}
-    total_weight: dict[int, float] = {}
-    attempts: dict[int, int] = {}
-    imports: dict[int, int] = {}
-    last_at: dict[int, datetime] = {}
-
     now = utcnow()
 
-    def _accumulate(kp_id: int | None, score: float, moment: datetime | None) -> None:
+    # key 统一为 (kp_id, student_id)
+    weighted: dict[tuple[int, int], float] = {}
+    total_weight: dict[tuple[int, int], float] = {}
+    attempts: dict[tuple[int, int], int] = {}
+    imports: dict[tuple[int, int], int] = {}
+    last_at: dict[tuple[int, int], datetime] = {}
+
+    def _accumulate(
+        student_id: int, kp_id: int | None, score: float, moment: datetime | None
+    ) -> None:
         if kp_id is None or kp_id in placeholders:
             return
+        key = (kp_id, student_id)
         weight = time_weight(moment, now=now)
-        weighted[kp_id] = weighted.get(kp_id, 0.0) + score * weight
-        total_weight[kp_id] = total_weight.get(kp_id, 0.0) + weight
+        weighted[key] = weighted.get(key, 0.0) + score * weight
+        total_weight[key] = total_weight.get(key, 0.0) + weight
         naive = _as_naive_utc(moment)
-        if naive is not None and (kp_id not in last_at or naive > last_at[kp_id]):
-            last_at[kp_id] = naive
+        if naive is not None and (key not in last_at or naive > last_at[key]):
+            last_at[key] = naive
 
-    for kp_id, is_correct, created_at in db.execute(
-        select(Attempt.kp_id, Attempt.is_correct, Attempt.created_at).where(
-            Attempt.student_id == student_id
-        )
-    ).all():
-        _accumulate(kp_id, 1.0 if is_correct else 0.0, created_at)
-        if kp_id is not None and kp_id not in placeholders:
-            attempts[kp_id] = attempts.get(kp_id, 0) + 1
-
-    for kp_id, score, total, created_at in db.execute(
+    for student_id, kp_id, is_correct, created_at in db.execute(
         select(
-            ScoreImport.kp_id, ScoreImport.score, ScoreImport.total, ScoreImport.created_at
-        ).where(ScoreImport.student_id == student_id)
+            Attempt.student_id, Attempt.kp_id, Attempt.is_correct, Attempt.created_at
+        ).where(Attempt.student_id.in_(ids))
+    ).all():
+        _accumulate(student_id, kp_id, 1.0 if is_correct else 0.0, created_at)
+        if kp_id is not None and kp_id not in placeholders:
+            key = (kp_id, student_id)
+            attempts[key] = attempts.get(key, 0) + 1
+
+    for student_id, kp_id, score, total, created_at in db.execute(
+        select(
+            ScoreImport.student_id,
+            ScoreImport.kp_id,
+            ScoreImport.score,
+            ScoreImport.total,
+            ScoreImport.created_at,
+        ).where(ScoreImport.student_id.in_(ids))
     ).all():
         # total 有 CHECK (total > 0) 约束兜底，这里再防一次浮点脏数据
         ratio = (score / total) if total else 0.0
-        _accumulate(kp_id, max(0.0, min(1.0, ratio)), created_at)
+        _accumulate(student_id, kp_id, max(0.0, min(1.0, ratio)), created_at)
         if kp_id is not None and kp_id not in placeholders:
-            imports[kp_id] = imports.get(kp_id, 0) + 1
+            key = (kp_id, student_id)
+            imports[key] = imports.get(key, 0) + 1
 
-    return {
-        kp_id: MasteryRecord(
+    grouped: dict[int, dict[int, MasteryRecord]] = {}
+    for kp_id, student_id in total_weight:
+        key = (kp_id, student_id)
+        grouped.setdefault(kp_id, {})[student_id] = MasteryRecord(
             kp_id=kp_id,
-            mastery=(weighted[kp_id] / total_weight[kp_id]) if total_weight[kp_id] else 0.0,
-            attempt_count=attempts.get(kp_id, 0),
-            import_count=imports.get(kp_id, 0),
-            last_at=last_at.get(kp_id),
+            mastery=(weighted[key] / total_weight[key]) if total_weight[key] else 0.0,
+            attempt_count=attempts.get(key, 0),
+            import_count=imports.get(key, 0),
+            last_at=last_at.get(key),
         )
-        for kp_id in total_weight
+    return grouped
+
+
+def compute_mastery(db: Session, student_id: int) -> dict[int, MasteryRecord]:
+    """实时计算**单个学生**的画像：`正确 × 时间衰减权重` 的加权平均（设计文档 4.3）。
+
+    数据源两路，粒度不同但都归一到 [0,1]：`attempts`（单题级，对/错 → 1/0）、
+    `score_imports`（知识点级，得分/满分）。历史成绩不写进 `attempts` 的原因见 3.3.3。
+
+    本函数是 `_compute` 的**单生拍平视图**——签名与返回值自工单19 起未变。
+    班级聚合走 `_compute`，两条路共用同一套取数与同一个 `time_weight`。
+    """
+    grouped = _compute(db, [student_id])
+    return {
+        kp_id: per_student[student_id]
+        for kp_id, per_student in grouped.items()
+        if student_id in per_student
     }
 
 
@@ -461,6 +504,7 @@ __all__ = [
     "MasteryRecord",
     "PROMOTE_STREAK",
     "WEAK_THRESHOLD",
+    "_compute",
     "apply_answer_to_state",
     "compute_mastery",
     "demote",
