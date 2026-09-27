@@ -21,6 +21,7 @@ from app.api import kb as kb_api
 from app.api import learn as learn_api
 from app.api import lecture as lecture_api
 from app.api import lesson as lesson_api
+from app.api import teach as teach_api
 from app.api import tts as tts_api
 from app.config import settings
 from app.db import init_db
@@ -92,6 +93,7 @@ app.include_router(assistant_api.router)
 app.include_router(learn_api.router)
 app.include_router(tts_api.router)
 app.include_router(lecture_api.router)
+app.include_router(teach_api.router)
 
 # [工单21] 已生成课程的媒体目录静态下发（/api/lecture/media/<courseId>/video.mp4）
 # 注意：挂载路径与 lecture 路由的 /api/lecture/courses 等不重叠，注册顺序无影响

@@ -340,3 +340,114 @@ def test_build_analytics_brief_states_denominator(client, kps):
     assert "不得编造" in brief
     assert "3 人中 1 人" in brief, "必须写明分母：3 人中的 1 人 ≠ 全班 1 人"
     assert "文本班" in brief
+
+
+# ------------------------------------------------------------------ Task 4
+
+
+def test_class_crud_and_permissions(client, teacher_token, student_token, other_teacher_token, auth):
+    """建班 / 列表 / 加人 / 移人 / 越权。"""
+    # 学生不能建班
+    resp = client.post(
+        "/api/teach/classes",
+        json={"name": "学生建的班", "course_name": "人工智能导论"},
+        headers=auth(student_token),
+    )
+    assert resp.status_code == 403
+
+    # 教师建班
+    resp = client.post(
+        "/api/teach/classes",
+        json={"name": "接口班", "course_name": "人工智能导论"},
+        headers=auth(teacher_token),
+    )
+    assert resp.status_code == 200, resp.text
+    class_id = resp.json()["data"]["id"]
+
+    # 教师列表看得到自己的班
+    resp = client.get("/api/teach/classes", headers=auth(teacher_token))
+    assert any(item["id"] == class_id for item in resp.json()["data"]["items"])
+
+    # 别的教师看不见
+    resp = client.get("/api/teach/classes", headers=auth(other_teacher_token))
+    assert all(item["id"] != class_id for item in resp.json()["data"]["items"])
+
+    # 别的教师不能往这个班加人（越权一律 403，设计文档 2.2 场景五验收标准）
+    resp = client.post(
+        f"/api/teach/classes/{class_id}/members",
+        json={"usernames": ["student_li"]},
+        headers=auth(other_teacher_token),
+    )
+    assert resp.status_code == 403
+
+    # 按 username 批量加人，逐行返回明细
+    resp = client.post(
+        f"/api/teach/classes/{class_id}/members",
+        json={"usernames": ["student_li", "不存在的人"]},
+        headers=auth(teacher_token),
+    )
+    assert resp.status_code == 200, resp.text
+    rows = {row["username"]: row for row in resp.json()["data"]["items"]}
+    assert rows["student_li"]["ok"] is True
+    assert rows["不存在的人"]["ok"] is False
+    assert rows["不存在的人"]["reason"], "失败行必须给出原因"
+    assert resp.json()["data"]["added"] == 1
+
+    # 学生看得到自己在的班（同一接口两种视角）
+    resp = client.get("/api/teach/classes", headers=auth(student_token))
+    assert any(item["id"] == class_id for item in resp.json()["data"]["items"])
+
+    # 学生不能看班级学生清单
+    resp = client.get(f"/api/teach/classes/{class_id}/students", headers=auth(student_token))
+    assert resp.status_code == 403
+
+    # 教师可以
+    resp = client.get(f"/api/teach/classes/{class_id}/students", headers=auth(teacher_token))
+    assert resp.status_code == 200, resp.text
+    student_id = next(
+        row["student_id"] for row in resp.json()["data"]["items"]
+        if row["username"] == "student_li"
+    )
+
+    # 移出成员
+    resp = client.delete(
+        f"/api/teach/classes/{class_id}/members/{student_id}", headers=auth(teacher_token)
+    )
+    assert resp.status_code == 200
+    resp = client.get(f"/api/teach/classes/{class_id}/students", headers=auth(teacher_token))
+    assert all(row["student_id"] != student_id for row in resp.json()["data"]["items"])
+
+
+def test_class_name_conflict(client, teacher_token, auth):
+    """同一教师下班级重名返回 400，不是 500。"""
+    payload = {"name": "重名班", "course_name": "人工智能导论"}
+    client.post("/api/teach/classes", json=payload, headers=auth(teacher_token))
+    resp = client.post("/api/teach/classes", json=payload, headers=auth(teacher_token))
+    assert resp.status_code == 400
+
+
+def test_insight_returns_structured_and_rendered(client, teacher_token, student_token, auth, kps):
+    """/insight 同时给出结构化聚合、热力图与渲染好的 brief——教师能核对将喂给模型什么。"""
+    resp = client.post(
+        "/api/teach/classes",
+        json={"name": "看板班", "course_name": "人工智能导论"},
+        headers=auth(teacher_token),
+    )
+    class_id = resp.json()["data"]["id"]
+    sid = _new_students(1)[0]
+    _add_members(class_id, [sid])
+    kp_id = kps["基础概念"]
+    for _ in range(2):
+        _answer(sid, kp_id, correct=False)
+
+    resp = client.get(f"/api/teach/classes/{class_id}/insight", headers=auth(teacher_token))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["coverage"]["covered_students"] == 1
+    assert data["weak_points"], "全错的学生应产生薄弱点"
+    assert data["heatmap"]["cells"], "热力图应有格子"
+    assert data["brief"] and "不得编造" in data["brief"]
+
+    # 学生无权访问看板
+    resp = client.get(f"/api/teach/classes/{class_id}/insight", headers=auth(student_token))
+    assert resp.status_code == 403
