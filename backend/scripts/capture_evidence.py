@@ -1,5 +1,6 @@
 # [工单19] 人工智能NLP-Agent数字人项目-教育智能体-个性化学习推荐任务 —— 验收取证脚本（覆盖工单17/18/19）
 # [工单23] 人工智能NLP-Agent数字人项目-教育智能体-班级学情闭环 —— 同文件追加 class-insight 场景
+# [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 同文件追加 role-gating 场景（跨 17/19/23 的侧边栏角色门禁）
 """验收取证：驱动本机 Edge 把三个工单的验收动线真点一遍，截图落盘到 docs/evidence/工单XX/。
 
 为什么要有这个脚本
@@ -14,6 +15,7 @@ CLAUDE.md 第 10 节 DoD 第 5 条要 `docs/evidence/工单XX/` 有截图，而�
     python scripts/capture_evidence.py                  # 全部
     python scripts/capture_evidence.py --only lesson    # 只跑工单17（lesson/assistant/learn/avatar）
     python scripts/capture_evidence.py --only avatar    # 只跑阶段二数字人
+    python scripts/capture_evidence.py --only gate      # 只跑侧边栏角色门禁（只读，不写库）
     python scripts/capture_evidence.py --stage avatar-speech   # 只跑某一个 stage
     python scripts/capture_evidence.py --headed         # 想看着它点（默认无头，不打扰你用电脑）
 
@@ -23,6 +25,7 @@ CLAUDE.md 第 10 节 DoD 第 5 条要 `docs/evidence/工单XX/` 有截图，而�
 ----
 - 会**真实写入演示库**（生成 1 条案例、若干作答、1 次 AI 分析）——跑完请按
   docs/进度记录.md 的办法还原，或直接用 `--dry-*` 之外的方式自行取舍。
+  例外：`class-insight` 与 `role-gating` 两个场景**只读不写**（跑完 md5 比对即可确认，见 §八 第 37 条）。
 - 判分需要正确答案，脚本**只读**地查一次 SQLite（`questions.answer`）；
   答案不会从练习/试卷接口拿——那些接口本来就不返回答案，这一点顺带被验证了。
 - 每步失败不中断：出错时截一张 `FAIL-*.png` 继续往下走，最后汇总。
@@ -1235,6 +1238,73 @@ def stage_class_insight(ev: Evidence) -> None:
     ev.check("预览含防编造约束", "不得编造" in body2)
 
 
+# ------------------------------------------------------------------ 侧边栏角色门禁
+
+
+def _menu_text(page: Page) -> str:
+    return page.locator(".app-aside").inner_text()
+
+
+def _landed_hash(page: Page, hash_path: str) -> str:
+    """敲一个 URL，返回守卫处理完后**实际停留**的 hash。
+
+    测试点是"角色不符时页面根本不挂载"——所以这里既不点按钮也不调接口，
+    只看落点。副作用是**拦截成功时一条 403 都不会发出**，控制台那条
+    「无 4xx/5xx 的 /api 请求」的汇总本身也是本场景的断言之一。
+    """
+    page.goto(f"{BASE}/#{hash_path}")
+    page.wait_for_timeout(900)  # 守卫是同步的，重定向后组件挂载与提示条出现还要一拍
+    return page.evaluate("() => location.hash")
+
+
+def stage_role_gating_teacher(ev: Evidence) -> None:
+    """教师侧：菜单只出教师可见项；学生专属页直接敲 URL 应被弹回。"""
+    page = ev.page
+    goto(ev, "/lesson", ".app-aside")
+    menu = _menu_text(page)
+    ev.shot("教师侧边栏")
+    ev.check("教师可见智能备课", "智能备课" in menu)
+    ev.check("教师可见内容生成", "内容生成" in menu)
+    ev.check("教师可见我的备课", "我的备课" in menu)
+    ev.check("教师可见班级学情", "班级学情" in menu)
+    ev.check("教师可见数字人讲课（菜单文字不复用页面标题）", "数字人讲课" in menu)
+    ev.check("教师保留学习路径（知识点治理入口）", "学习路径" in menu)
+    ev.check("教师侧隐藏学习仪表盘", "学习仪表盘" not in menu)
+    ev.check("教师侧隐藏练习与试卷", "练习与试卷" not in menu)
+    ev.check("教师侧隐藏错题本", "错题本" not in menu)
+
+    landed = _landed_hash(page, "/learn/practice")
+    ev.check("教师敲学生专属页被弹回教师落地页", landed == "#/lesson", f"实际落到 {landed}")
+    ev.shot("教师敲学生专属页-被弹回")
+
+
+def stage_role_gating_student(ev: Evidence) -> None:
+    """学生侧：菜单不出教师项；教师专属页直接敲 URL 应被弹回。
+
+    本场景对应台账里那条「学生点我的备课会 403」——修好之后的表现是
+    **菜单里根本没有这一项，且硬敲 URL 也到不了**，而不是"到了才弹红条"。
+    """
+    page = ev.page
+    goto(ev, "/learn/dashboard")
+    menu = _menu_text(page)
+    ev.shot("学生侧边栏")
+    ev.check("学生看不到智能备课", "智能备课" not in menu)
+    ev.check("学生看不到我的备课", "我的备课" not in menu)
+    ev.check("学生看不到班级学情", "班级学情" not in menu)
+    ev.check("学生可见智能助教", "智能助教" in menu)
+    ev.check("学生可见虚拟教室（看课）", "虚拟教室" in menu and "数字人讲课" in menu)
+    ev.check("学生可见学习仪表盘", "学习仪表盘" in menu)
+    ev.check("学生可见练习与试卷", "练习与试卷" in menu)
+    ev.check("学生可见错题本", "错题本" in menu)
+
+    landed = _landed_hash(page, "/lesson/plans")
+    ev.check("学生敲教师专属页被弹回学生落地页", landed == "#/learn/dashboard", f"实际落到 {landed}")
+    ev.shot("学生敲教师专属页-被弹回")
+
+    landed2 = _landed_hash(page, "/teach/class")
+    ev.check("学生敲班级看板被弹回学生落地页", landed2 == "#/learn/dashboard", f"实际落到 {landed2}")
+
+
 # ------------------------------------------------------------------ 主流程
 
 _case_plan_id = ""
@@ -1261,6 +1331,10 @@ STAGES = [
     ("lecture-room", "avatar", stage_lecture_room, "21", "teacher"),
     ("desk-layout", "avatar", stage_desk_layout, "22", "teacher"),
     ("class-insight", "teach", stage_class_insight, "23", "teacher"),
+    # 角色门禁：跨 17/19/23 三个模块的侧边栏可见性，故用独立目录（不是某个工单的功能）。
+    # 放在最后——它要两种角色各跑一遍，会多一次登录切换。
+    ("role-gating-teacher", "gate", stage_role_gating_teacher, "角色门禁", "teacher"),
+    ("role-gating-student", "gate", stage_role_gating_student, "角色门禁", "student"),
 ]
 
 ACCOUNTS = {"teacher": TEACHER, "student": STUDENT}
