@@ -1277,6 +1277,10 @@ def stage_role_gating_teacher(ev: Evidence) -> None:
     ev.check("教师敲学生专属页被弹回教师落地页", landed == "#/lesson", f"实际落到 {landed}")
     ev.shot("教师敲学生专属页-被弹回")
 
+    # 两条重定向走的是 homePath()，与登录落地同一处逻辑
+    ev.check("教师访问根路径落到 /lesson", _landed_hash(page, "/") == "#/lesson")
+    ev.check("教师访问 /learn 落到学习路径（治理入口）", _landed_hash(page, "/learn") == "#/learn/path")
+
 
 def stage_role_gating_student(ev: Evidence) -> None:
     """学生侧：菜单不出教师项；教师专属页直接敲 URL 应被弹回。
@@ -1303,6 +1307,8 @@ def stage_role_gating_student(ev: Evidence) -> None:
 
     landed2 = _landed_hash(page, "/teach/class")
     ev.check("学生敲班级看板被弹回学生落地页", landed2 == "#/learn/dashboard", f"实际落到 {landed2}")
+
+    ev.check("学生访问根路径落到仪表盘", _landed_hash(page, "/") == "#/learn/dashboard")
 
 
 # ------------------------------------------------------------------ 主流程
