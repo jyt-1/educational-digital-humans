@@ -1200,6 +1200,85 @@ def stage_desk_layout(ev: Evidence) -> None:
         ev.note("空会话无引用入口，抽屉联动由问答流覆盖（工单18 已验）")
 
 
+# ------------------------------------------------------------------ 公式支持
+# 跨 工单18（问答页渲染）与 阶段二（朗读清洗），不属于某一个工单，故用独立目录，
+# 与「角色门禁」同类。
+
+
+def stage_chat_formula(ev: Evidence) -> None:
+    """公式支持：① 页面把 LaTeX 渲染成 KaTeX；② 公式不再被朗读环节整块丢弃。
+
+    这条场景**必须真的问一次大模型**——公式能从 prompt 里长出来，本身就是被验证的
+    一半（只断言"页面能渲染我塞进去的字符串"会漏掉 prompt 没生效这种失败）。
+    另半边（LaTeX → 中文口语）由 pytest 的 24 条对照表覆盖，这里不重复。
+    """
+    page = ev.page
+    goto(ev, "/assistant/chat", ".desk")
+    page.wait_for_timeout(600)
+
+    page.locator(".stage-textarea textarea").first.fill(
+        "请写出梯度下降的参数更新公式（独立成行），逐项解释每个符号，"
+        "并说明学习率过大时会发生什么。"
+    )
+    page.get_by_role("button", name="发送").click()
+
+    page.locator(".thread-cursor").wait_for(state="visible", timeout=30000)
+    page.wait_for_timeout(800)
+    ev.shot("公式-流式生成中")
+
+    # 朗读侧：公式若仍被整块丢弃，含公式的段落会是空串、压根进不了语音队列，
+    # 舞台的声波条就永远不亮。故"念了"这件事用 .spot-wave 出现来证。
+    #
+    # 两个坑（都真踩过）：
+    # ① 轮询必须与"等流结束"**并行**——声波条只在播的时候亮，串行等完再查必然查不到；
+    # ② 流结束后还要再宽限一会儿——首句要等 edge-tts 合成回来才响，公式答案的句子
+    #    又长又独特（缓存里没有），合成延迟能盖过整个流式过程，流一停就收工同样会漏。
+    spoke = False
+    streaming_done = False
+    t0 = time.time()
+    t_end = t_spoke = 0.0
+    while time.time() - t0 < 240:
+        if not spoke and page.locator(".spot-wave").is_visible():
+            spoke = True
+            t_spoke = time.time()
+            ev.shot("公式-朗读中（声波条亮起）")
+        if not streaming_done and page.locator(".thread-cursor").count() == 0:
+            streaming_done = True
+            t_end = time.time()
+        if streaming_done and spoke:
+            break
+        if streaming_done and time.time() - t_end > 40:
+            break
+        page.wait_for_timeout(200)
+
+    ev.check("流式回答已结束", streaming_done, f"等待 {t_end - t0:.0f} 秒")
+    page.wait_for_timeout(1000)
+    ev.shot("公式-渲染完成")
+
+    katex = page.locator(".katex")
+    display = page.locator(".katex-display")
+    ev.check("页面渲染出 KaTeX 公式", katex.count() >= 1, f"{katex.count()} 处")
+    ev.check("含独立成行的公式（行间模式）", display.count() >= 1, f"{display.count()} 处")
+    ev.check("流式占位全部还原（无残留）", page.locator(".tex-pending").count() == 0)
+    ev.check("没有渲染失败的公式", page.locator(".katex-error").count() == 0)
+
+    # 源码不许漏到正文里：漏了说明不是"渲染了公式"，而是"把 LaTeX 当普通文字显示"
+    body = page.locator(".thread-md").last.inner_text()
+    leaked = re.findall(r"\\[a-zA-Z]{2,}|\$\$|\$[^$]{1,20}\$", body)
+    ev.check("正文里没有残留的 LaTeX 源码", not leaked, f"漏出 {leaked[:3]}")
+
+    ev.check("含公式的答案照常朗读（声波条亮起）", spoke,
+             f"发送后 {t_spoke - t0:.0f} 秒开念" if spoke
+             else "240 秒内未观察到发声，检查 edge-tts 联网与 TTS_ENABLED")
+
+    # 公式渲染后字号/换行没把气泡撑破：气泡宽度不得超过会话区
+    overflow = page.evaluate(
+        "() => { const all = document.querySelectorAll('.thread-md');"
+        " const m = all[all.length - 1]; const c = document.querySelector('.side-thread');"
+        " return m && c ? m.scrollWidth - c.clientWidth : 0; }")
+    ev.check("公式未撑破会话区（无横向溢出）", overflow <= 2, f"溢出 {overflow}px")
+
+
 # ------------------------------------------------------------------ 工单23
 
 
@@ -1336,6 +1415,7 @@ STAGES = [
     ("avatar-gallery", "avatar", stage_avatar_gallery, "20", "teacher"),
     ("lecture-room", "avatar", stage_lecture_room, "21", "teacher"),
     ("desk-layout", "avatar", stage_desk_layout, "22", "teacher"),
+    ("chat-formula", "assistant", stage_chat_formula, "公式渲染", "teacher"),
     ("class-insight", "teach", stage_class_insight, "23", "teacher"),
     # 角色门禁：跨 17/19/23 三个模块的侧边栏可见性，故用独立目录（不是某个工单的功能）。
     # 放在最后——它要两种角色各跑一遍，会多一次登录切换。

@@ -65,8 +65,16 @@ _STRIKE_RE = re.compile(r"~~(.+?)~~")
 _ITALIC_RE = re.compile(r"(\*|_)(.+?)\1")
 _HTML_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _ESCAPE_RE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!~|>])")
-# 行间公式 $$...$$ 整块丢弃：LaTeX 念出来是纯噪音（行内 $x$ 不动——价格、变量都长这样，误伤代价更大）
-_MATH_BLOCK_RE = re.compile(r"\$\$.+?\$\$|\\\[.+?\\\]", re.DOTALL)
+# 公式片段。前三组（$$..$$ / \[..\] / \(..\)）是行间，一定转中文口语；
+# 第四组 $..$ 是行内，**要过 _looks_like_math 守卫**——散文里也有成对的美元号。
+_MATH_SPAN_RE = re.compile(
+    r"\$\$(.+?)\$\$|\\\[(.+?)\\\]|\\\((.+?)\\\)|\$([^$\n]+?)\$", re.DOTALL
+)
+# 行内公式的「像公式」特征：反斜杠命令 / 上下标 / 等号
+_MATH_SIGNAL_RE = re.compile(r"[\\^_=]")
+# 短到不可能是价格区间的单 token（$x$、$0.01$）也算公式
+_SHORT_TOKEN_RE = re.compile(r"[A-Za-z0-9.,]{1,5}")
+_CJK_RE = re.compile(r"[一-鿿]")
 # emoji 与变体选择符。**不含箭头区（U+2190~21FF）**——"A → B"在教学文本里是内容，删了会粘成"AB"
 _EMOJI_RE = re.compile(
     "[\U0001f000-\U0001faff\U00002600-\U000027bf\U0000fe00-\U0000fe0f\U0000200d]+"
@@ -102,6 +110,246 @@ def available_voices() -> list[dict]:
     return [dict(item) for item in _ZH_VOICES]
 
 
+# ---------------------------------------------------------------- 公式朗读
+# LaTeX → 中文口语。**查表 + 少量结构规则，不是 LaTeX 解析器**——目标是把
+# `\frac{1}{m}\sum_{i=1}^{m}(y_i - \hat{y}_i)^2` 念成人话，而不是让数字人念出
+# 反斜杠和花括号。
+#
+# 三条兜底原则（改这段前先读）：
+# 1. **认不出的命令丢命令名、保留花括号内容**——`\mathcal{D}` 该念成 "D"；
+# 2. **整条公式一个字都没认出来就返回空串**，调用方自然整块跳过；
+# 3. **念错比不念更糟**——数字人当众念出「反斜杠 n a b l a」比沉默更伤，
+#    所以不认识的命令一律不猜、不硬拼读音。
+
+# 希腊字母（小写 + 大写）。按中文数学课堂的读法，不用英文字母名。
+_GREEK: dict[str, str] = {
+    "alpha": "阿尔法", "beta": "贝塔", "gamma": "伽马", "delta": "德尔塔",
+    "epsilon": "艾普西龙", "varepsilon": "艾普西龙", "zeta": "泽塔", "eta": "伊塔",
+    "theta": "西塔", "vartheta": "西塔", "iota": "约塔", "kappa": "卡帕",
+    "lambda": "拉姆达", "mu": "缪", "nu": "纽", "xi": "克西", "pi": "派",
+    "rho": "柔", "sigma": "西格玛", "tau": "陶", "upsilon": "宇普西龙",
+    "phi": "斐", "varphi": "斐", "chi": "卡方", "psi": "普西", "omega": "欧米伽",
+    "Gamma": "伽马", "Delta": "德尔塔", "Theta": "西塔", "Lambda": "拉姆达",
+    "Pi": "派", "Sigma": "西格玛", "Phi": "斐", "Psi": "普西", "Omega": "欧米伽",
+}
+
+# 运算符与函数名。log / sin / max 这类保持拉丁字母——中文课堂也这么念。
+_MATH_CMDS: dict[str, str] = {
+    "nabla": "梯度", "partial": "偏导", "infty": "无穷", "cdot": "乘以",
+    "times": "乘以", "div": "除以", "pm": "正负",
+    "leq": "小于等于", "le": "小于等于", "geq": "大于等于", "ge": "大于等于",
+    "neq": "不等于", "ne": "不等于", "approx": "约等于", "equiv": "恒等于",
+    "propto": "正比于", "to": "趋近于", "rightarrow": "趋近于", "Rightarrow": "推出",
+    "in": "属于", "notin": "不属于", "forall": "任意", "exists": "存在",
+    "subset": "包含于", "cup": "并集", "cap": "交集",
+    "log": "log", "ln": "ln", "exp": "exp", "sin": "sin", "cos": "cos", "tan": "tan",
+    "max": "max", "min": "min", "arg": "arg", "lim": "lim", "det": "det",
+    "quad": "", "qquad": "", "limits": "", "nolimits": "", "displaystyle": "",
+}
+
+# 修饰命令：内容在前、修饰词在后，与中文口语同序（`\hat{y}` → "y 帽"）
+_ACCENT_CMDS: dict[str, str] = {"hat": "帽", "bar": "拔"}
+
+# 带上下限的命令：`\sum_{i=1}^{m}` → "求和 从 i 等于 1 到 m"。
+# 必须走结构规则——按通用上下标拼会念成「求和 下标 i 等于 1 的 m 次方」，
+# 把上标误当成幂，是**主动念错**。
+_BOUNDED_CMDS: dict[str, str] = {
+    "sum": "求和", "prod": "连乘", "int": "积分", "iint": "二重积分"
+}
+
+# 命令连同花括号参数一起丢弃（参数是排版名，不是内容）
+_DROP_ARG_CMDS = frozenset(
+    {"begin", "end", "label", "tag", "color", "textcolor", "hspace", "vspace"}
+)
+
+# LaTeX 里的转义字符：反斜杠是「去掉特殊含义」，字符本身要照念
+# （`100\%` 得念出「百分之」而不是丢成 "100"）
+_ESCAPED_LITERAL = frozenset("%$&#_{}")
+# 间距命令：`\,` `\;` 是细空格，`\!` 是负空格——念出来都是停顿，故只留一个空格
+_SPACING_CMDS = frozenset({",", ";", ":", " "})
+
+# 公式里的单字符运算符
+_PLAIN_MAP = {"=": " 等于 ", "+": " 加 ", "-": " 减 ", "<": " 小于 ", ">": " 大于 "}
+
+_LATEX_CMD_RE = re.compile(r"\\([A-Za-z]+|.)", re.DOTALL)
+# 转换后可能留下「西塔 )」这样的空格（\theta 自带尾空格），朗读会多一个停顿
+_SPACE_BEFORE_CLOSER_RE = re.compile(r"\s+([)\]},;.])")
+
+
+def _read_braced(tex: str, i: int) -> tuple[str, int] | None:
+    """``tex[i]`` 是 ``{`` 时读出配对花括号内的**原文**；否则返回 None。
+
+    手写配平而不是用正则：``\\frac{\\partial J}{\\partial \\theta}`` 的分子分母
+    各自还带花括号，正则的 ``.+?`` 会在第一个 ``}`` 就收尾，把分母切错。
+    """
+    if i >= len(tex) or tex[i] != "{":
+        return None
+    depth, j = 1, i + 1
+    while j < len(tex) and depth:
+        if tex[j] == "{":
+            depth += 1
+        elif tex[j] == "}":
+            depth -= 1
+        j += 1
+    return (tex[i + 1 : j - 1], j) if depth == 0 else (tex[i + 1 :], j)
+
+
+def _read_atom(tex: str, i: int) -> tuple[str, int]:
+    """读一个 ``{...}`` 或单个字符的原文（``_i`` 的 ``i``、``x^2`` 的 ``2``）。"""
+    braced = _read_braced(tex, i)
+    if braced is not None:
+        return braced
+    if i < len(tex):
+        return tex[i], i + 1
+    return "", i
+
+
+def _read_bracket(tex: str, i: int) -> tuple[str, int]:
+    """读 ``[..]``（``\\sqrt[3]{x}`` 的次数）；没有则返回空串且不动位置。"""
+    if i >= len(tex) or tex[i] != "[":
+        return "", i
+    j = tex.find("]", i + 1)
+    if j == -1:
+        return "", i
+    return tex[i + 1 : j], j + 1
+
+
+def _emit_script(tex: str, i: int, out: list[str], *, sup: bool) -> int:
+    """处理 ``^...`` / ``_...``，返回新位置。"""
+    raw, i = _read_atom(tex, i)
+    key = raw.strip()
+    if not key:
+        return i
+    # 前置空格不能省：`x^2` 拼成 "x的平方" 会与变量名黏成一个词，朗读断不开
+    if not sup:
+        out.append(f" 下标 {_scan(raw).strip()} ")
+        return i
+    # 幂次特例：这三个在机器学习文本里高频，念成「的 2 次方」不自然
+    special = {"2": "的平方", "3": "的立方", "T": "的转置", "-1": "的逆"}
+    out.append(f" {special.get(key) or f'的 {_scan(raw).strip()} 次方'} ")
+    return i
+
+
+def _emit_cmd(cmd: str, tex: str, i: int, out: list[str]) -> int:
+    """处理一个 ``\\命令``，把朗读文本追加进 out，返回新位置。"""
+    if cmd in _GREEK:
+        out.append(_GREEK[cmd] + " ")
+        return i
+    if cmd in _MATH_CMDS:
+        word = _MATH_CMDS[cmd]
+        if word:
+            out.append(word + " ")
+        return i
+    if cmd in _ACCENT_CMDS:
+        raw, i = _read_atom(tex, i)
+        if not raw.strip():  # `\bar` 后面没跟内容（退化写法）→ 丢，别念出孤零零的"拔"
+            return i
+        out.append(f"{_scan(raw).strip()} {_ACCENT_CMDS[cmd]} ")
+        return i
+    if cmd == "frac":
+        num, i = _read_atom(tex, i)
+        den, i = _read_atom(tex, i)
+        out.append(f"{_scan(num).strip()} 除以 {_scan(den).strip()} ")
+        return i
+    if cmd == "sqrt":
+        deg, i = _read_bracket(tex, i)
+        rad, i = _read_atom(tex, i)
+        body = _scan(rad).strip()
+        out.append(f"{body} 的 {_scan(deg).strip()} 次方根 " if deg.strip() else f"根号 {body} ")
+        return i
+    if cmd in _BOUNDED_CMDS:
+        word = _BOUNDED_CMDS[cmd]
+        sub_raw = sup_raw = ""
+        if i < len(tex) and tex[i] == "_":
+            sub_raw, i = _read_atom(tex, i + 1)
+        if i < len(tex) and tex[i] == "^":
+            sup_raw, i = _read_atom(tex, i + 1)
+        sub, sup = _scan(sub_raw).strip(), _scan(sup_raw).strip()
+        if sub and sup:
+            out.append(f"{word} 从 {sub} 到 {sup} ")
+        elif sub:
+            out.append(f"{word} 从 {sub} ")
+        elif sup:
+            out.append(f"{word} 到 {sup} ")
+        else:
+            out.append(word + " ")
+        return i
+    if cmd in _DROP_ARG_CMDS:
+        _, i = _read_atom(tex, i)
+        return i
+    if cmd in _ESCAPED_LITERAL:
+        out.append(cmd)  # `\%` `\$` `\&` 的字符本身是要念的
+        return i
+    if cmd in _SPACING_CMDS or cmd == "!" or cmd.strip() == "":
+        out.append(" ")
+        return i
+    # 未知命令：丢命令名、保留花括号内容（`\mathcal{D}` → "D"），无花括号则什么都不留。
+    # **不猜**——猜错会念出原文里根本没有的东西。
+    braced = _read_braced(tex, i)
+    if braced is not None:
+        out.append(_scan(braced[0]) + " ")
+        return braced[1]
+    return i
+
+
+def _scan(tex: str) -> str:
+    """递归扫描一段 LaTeX，拼出可朗读的中文。"""
+    out: list[str] = []
+    i, n = 0, len(tex)
+    while i < n:
+        ch = tex[i]
+        if ch == "\\":
+            m = _LATEX_CMD_RE.match(tex, i)
+            if m is None:  # 尾部孤立的反斜杠
+                i += 1
+                continue
+            i = _emit_cmd(m.group(1), tex, m.end(), out)
+        elif ch in "{}":
+            i += 1  # 分组花括号本身不念，内容照常
+        elif ch in "^_":
+            i = _emit_script(tex, i + 1, out, sup=ch == "^")
+        elif ch in _PLAIN_MAP:
+            out.append(_PLAIN_MAP[ch])
+            i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def latex_to_speech(tex: str) -> str:
+    """把一段 LaTeX 公式转成中文口语；一个字都认不出时返回空串。
+
+    返回空串是**正常结果**不是错误——调用方据此整块跳过，等价于旧行为「公式不念」。
+    """
+    if not tex or not tex.strip():
+        return ""
+    text = _SPACE_BEFORE_CLOSER_RE.sub(r"\1", _scan(tex))
+    return _WS_RE.sub(" ", text).strip()
+
+
+def _looks_like_math(tex: str) -> bool:
+    """行内 ``$...$`` 的守卫：只有确实像公式才转中文。
+
+    旧注释的担忧是对的——「价格 $5 到 $10」里也有成对美元号。故要求内容
+    **不含汉字**（含汉字基本是散文里被误配的一对 ``$``），且要么带 LaTeX 特征
+    （反斜杠命令 / 上下标 / 等号），要么短到不可能是价格区间（``$x$``、``$0.01$``）。
+    拿不准就返回 False，退回「原样保留」——那不会念出错误内容。
+    """
+    if _CJK_RE.search(tex):
+        return False
+    return bool(_MATH_SIGNAL_RE.search(tex)) or bool(_SHORT_TOKEN_RE.fullmatch(tex.strip()))
+
+
+def _math_repl(m: re.Match) -> str:
+    """把文本里的一段公式替换成可朗读的中文（认不出则替换成空格）。"""
+    tex = next((g for g in m.groups() if g is not None), "")
+    if m.group(4) is not None and not _looks_like_math(tex):
+        return m.group(0)  # 行内 $..$ 但不像公式（价格等）→ 原样保留
+    spoken = latex_to_speech(tex)
+    return f" {spoken} " if spoken else " "
+
+
 def to_speakable(markdown_text: str) -> str:
     """把答案里的 Markdown 片段清洗成适合朗读的纯文本。
 
@@ -111,13 +359,16 @@ def to_speakable(markdown_text: str) -> str:
     2. 再逐行处理表格行、分隔线、标题/引用/列表的行首标记；
     3. 然后处理行内语法，**图片必须早于链接**（`![a](b)` 里含有 `[a](b)` 的形状）；
     4. 最后折叠空白并判断是否只剩标点。
+
+    公式在第 1 步就转成中文口语：`\\frac{a}{b}` 念「a 除以 b」，而不是让数字人念
+    反斜杠和花括号。**必须在逐行处理之前做**——`$$...$$` 常跨行，先按行切会把它拆碎。
     """
     if not markdown_text:
         return ""
 
-    # 1. 代码围栏与行间公式整块丢弃（含未闭合的尾部围栏）
+    # 1. 代码围栏整块丢弃（含未闭合的尾部围栏）；公式转中文口语
     text = _FENCE_RE.sub(" ", markdown_text)
-    text = _MATH_BLOCK_RE.sub(" ", text)
+    text = _MATH_SPAN_RE.sub(_math_repl, text)
 
     # 2. 逐行处理
     kept: list[str] = []
