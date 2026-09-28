@@ -81,6 +81,20 @@ def build_docx() -> bytes:
     return buffer.getvalue()
 
 
+def insert_tex(page: "fitz.Page", x: float, y: float, tex: str, max_width: float = 451.0) -> None:
+    """在 PDF 里插一行 LaTeX 公式。
+
+    **必须用 base-14 拉丁字体，不能用 ``china-s``**：中文字体下每个字形按全角宽度
+    排版，PyMuPDF 抽文本时会在字符间插空格，``\\frac`` 会变成 ``\\ f r a c``（实测），
+    LaTeX 彻底毁掉。base-14 的 cour/helv 是纯 ASCII 比例字体，抽取逐字完好。
+    字号按行宽反算，保证长公式不被页边截断——截断会让花括号配不上对。
+
+    Courier 的字符步进正好是 0.6em，据此反算字号。
+    """
+    size = min(10.0, max_width / (0.6 * max(len(tex), 1)))
+    page.insert_text((x, y), tex, fontname="cour", fontsize=round(size, 1))
+
+
 def build_pdf() -> bytes:
     doc = fitz.open()
     pages = [
@@ -88,10 +102,27 @@ def build_pdf() -> bytes:
         ("2.1 常见损失函数", "回归任务常用均方误差，分类任务常用交叉熵。损失函数衡量预测与真实的差距。"),
         ("2.2 优化器对照表", "不同优化器在不同任务上的表现差异明显，下表为课程实验中的对照结论。"),
     ]
+    # 公式写成 LaTeX 源码，不是排版后的符号：解析器会把含 `\frac` / `\sum` 的块判成
+    # formula 块，检索到后原样进模型上下文，模型照着写进答案，前端再渲染成公式。
+    # 若在 PDF 里画成 Σ / ² 这类符号，答案里就只能得到纯文本，排版与朗读两头都丢。
+    loss_formulas = {
+        2: [
+            "回归任务常用均方误差：",
+            r"$$L = \frac{1}{m}\sum_{i=1}^{m}(y_i - \hat{y}_i)^2$$",
+            "分类任务常用交叉熵：",
+            r"$$L = -\frac{1}{m}\sum_{i=1}^{m}[y_i\log\hat{y}_i + (1-y_i)\log(1-\hat{y}_i)]$$",
+        ]
+    }
     for index, (title, body) in enumerate(pages, start=1):
         page = doc.new_page(width=595, height=842)
         page.insert_text((72, 70), title, fontname="china-s", fontsize=16)
         page.insert_text((72, 110), body, fontname="china-s", fontsize=11)
+        for offset, line in enumerate(loss_formulas.get(index, [])):
+            y = 150 + offset * 30
+            if line.startswith("$$"):
+                insert_tex(page, 90, y, line)
+            else:
+                page.insert_text((72, y), line, fontname="china-s", fontsize=11)
         if index == 3:
             x0, y0, rows, cols, w, h = 72, 160, 4, 3, 140, 28
             for r in range(rows + 1):

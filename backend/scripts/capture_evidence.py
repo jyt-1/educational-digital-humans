@@ -1279,6 +1279,100 @@ def stage_chat_formula(ev: Evidence) -> None:
     ev.check("公式未撑破会话区（无横向溢出）", overflow <= 2, f"溢出 {overflow}px")
 
 
+def stage_kb_formula(ev: Evidence) -> None:
+    """知识库里的公式真的抵达了页面（`seed_kb.py` 给「机器学习基础」PDF 埋的两条）。
+
+    与 `chat-formula` 的分工——失败模式不同，谁也替不了谁：
+    - `chat-formula` 压「模型会不会写 LaTeX、页面会不会渲染」（纯前端 + prompt）；
+    - 本场景压「知识库里的 LaTeX 有没有原样活到页面」。中间隔着
+      PDF → 解析切块 → 向量检索 → 模型抄写 一整条链路，任一环把 LaTeX 弄丢
+      （中文字体抽文本会逐字插空格，见 `seed_kb.insert_tex` 的注释），
+      模型都会拿自己脑子里的公式补上——**答案照样漂亮，等于知识库白加**。
+      所以关键判据取**引用卡的「查看原文」弹层**：它直出切块正文、不经模型，
+      弹层里能还原出那条公式，才证明 LaTeX 真的一路活着到了页面。
+
+    断言还直接读 KaTeX 的 `<annotation encoding="application/x-tex">`——那是它
+    保留的原始 TeX 源码。比数 `.katex` 个数强得多：能验到「渲染的正是知识库那条
+    `\\frac` + `\\sum`」，而不是碰巧某处有个 `$x$`。
+    """
+    page = ev.page
+    goto(ev, "/assistant/chat", ".desk")
+    page.wait_for_timeout(600)
+
+    # 问法带上切块里的原词（损失函数 / 均方误差 / 交叉熵），保证召回的正是那一块
+    page.locator(".stage-textarea textarea").first.fill(
+        "知识库里第二章讲的损失函数，均方误差和交叉熵的公式分别怎么写？"
+    )
+    page.get_by_role("button", name="发送").click()
+    page.locator(".thread-cursor").wait_for(state="visible", timeout=30000)
+
+    # 本场景不压朗读（那是 chat-formula 的活），所以老老实实等流结束即可
+    deadline = time.time() + 180
+    while time.time() < deadline and page.locator(".thread-cursor").count():
+        page.wait_for_timeout(200)
+    page.wait_for_timeout(1200)
+    ev.shot("知识库公式-答案生成完毕")
+
+    answer = page.locator(".thread-md").last
+    got = answer.locator(".katex").count()
+    ev.check("答案里渲染出公式", got >= 1, f"{got} 处")
+    ev.check("答案里没有残留的 LaTeX 源码",
+             not re.findall(r"\\[a-zA-Z]{2,}|\$\$", answer.inner_text()))
+    ev.check("答案带引用角标", answer.locator(".cite-badge").count() >= 1)
+
+    # 打开舞台右侧的引用抽屉，找「机器学习基础」那张卡
+    page.locator(".cites-toggle").click()
+    page.wait_for_timeout(800)
+    ev.shot("知识库公式-引用来源")
+
+    cards = page.locator(".citation-card")
+    total = cards.count()
+    ev.check("引用卡非空", total >= 1, f"{total} 张")
+    target = None
+    for i in range(total):
+        if "机器学习基础" in cards.nth(i).locator(".cite-file").inner_text():
+            target = cards.nth(i)
+            break
+    ev.check("引用到了「机器学习基础」那份资料", target is not None,
+             "本班知识库里没这份资料？先跑 seed_kb.py" if target is None else "")
+    if target is None:
+        return
+
+    target.get_by_role("button", name="查看原文").click()
+    origin = page.locator(".origin-body")
+    origin.wait_for(state="visible", timeout=10000)
+    page.wait_for_timeout(800)
+    ev.shot("知识库公式-引用原文弹层")
+
+    tex = origin.locator("annotation[encoding='application/x-tex']")
+    tex_count = tex.count()
+    ev.check("引用原文里渲染出公式", origin.locator(".katex").count() >= 1, f"{tex_count} 条 TeX 源码")
+    ev.check("原文里没有残留的 LaTeX 源码",
+             not re.findall(r"\\[a-zA-Z]{2,}|\$\$", origin.inner_text()))
+
+    # 弹层要完整落在视口里。引用抽屉带 backdrop-filter，会给 position:fixed 的后代
+    # 当**包含块**——没了 `append-to-body`，弹层就以 366px 宽的面板为准居中，
+    # 右侧 361px 甩出视口（实测），公式正好被切掉半截。这条断言就是防它回潮。
+    box = page.evaluate(
+        "() => { const d = document.querySelector('.el-dialog');"
+        " if (!d) return null; const r = d.getBoundingClientRect();"
+        " return { clip: Math.round(Math.max(0, r.right - innerWidth) + Math.max(0, -r.left)) }; }")
+    ev.check("原文弹层完整落在视口内（未被面板 backdrop-filter 挤出去）",
+             box is not None and box["clip"] <= 1,
+             f"超出视口 {box['clip']}px" if box else "弹层不存在")
+    # 公式自己也不许在弹层里溢出（窄屏时靠这条 + 上面的 overflow-x 兜底）
+    over = page.evaluate(
+        "() => { const o = document.querySelector('.origin-body');"
+        " return o ? o.scrollWidth - o.clientWidth : -1; }")
+    ev.check("公式未撑破原文弹层", over <= 2, f"溢出 {over}px")
+
+    joined = " ".join(tex.nth(i).text_content() or "" for i in range(tex_count))
+    ev.check("还原的是知识库那条均方误差（含 \\frac 与 \\sum）",
+             "\\frac" in joined and "\\sum" in joined and "\\hat" in joined)
+    ev.check("还原的是知识库那条交叉熵（含 \\log）", "\\log" in joined)
+    ev.check("两条公式都在原文里", tex_count >= 2, f"{tex_count} 条")
+
+
 # ------------------------------------------------------------------ 工单23
 
 
@@ -1416,6 +1510,11 @@ STAGES = [
     ("lecture-room", "avatar", stage_lecture_room, "21", "teacher"),
     ("desk-layout", "avatar", stage_desk_layout, "22", "teacher"),
     ("chat-formula", "assistant", stage_chat_formula, "公式渲染", "teacher"),
+    # 独立目录（不是「公式渲染」下的第二组）：`shot()` 的编号是**按工单号连续**的，
+    # 两条场景共用一个目录则各跑各的时候会出现两个 `01-`、两个 `02-`——文件名不同
+    # 所以不会互相覆盖，但同一目录里两套编号看着就是错的。跨工单的场景一律独立成目录
+    # （与 `角色门禁` 同理）。
+    ("kb-formula", "assistant", stage_kb_formula, "知识库公式", "teacher"),
     ("class-insight", "teach", stage_class_insight, "23", "teacher"),
     # 角色门禁：跨 17/19/23 三个模块的侧边栏可见性，故用独立目录（不是某个工单的功能）。
     # 放在最后——它要两种角色各跑一遍，会多一次登录切换。
