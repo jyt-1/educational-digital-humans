@@ -98,6 +98,9 @@ Education-agent/
 │       ├── avatar/            ← 〔阶段二〕provider.js（形象驱动 provider）/ faces.js（形象库清单）
 │       ├── views/lesson/ assistant/ learn/ lecture/〔21〕teach/〔23〕
 │       ├── router/  store/  components/   ← components 含 AvatarPhotoCanvas.vue/AvatarLive2D.vue〔形象库〕与 AvatarSpotlight.vue〔22 舞台壳〕
+│       ├── utils/             ← 〔2026-09-28〕markdown.js：**全站唯一的「Markdown + 公式」渲染入口**，
+│       │                        6 个渲染点（问答页/讲课页/引用卡/错题本/练习页/备课预览）都走它
+│       ├── styles/            ← main.css（全局）+ markdown.css（公式的公共样式，随 markdown.js 自动引入）
 │       └── App.vue            ← 侧边栏导航（按角色隐藏教师/学生专属项）
 ├── data/                      ← SQLite + Chroma + tts_cache 持久化（gitignore）
 └── uploads/                   ← 上传文档与录音（gitignore；含 uploads/lectures/〔21 成课产物〕）
@@ -245,6 +248,18 @@ UPLOAD_DIR=./uploads
 - 问答：SSE 流式；答案内嵌 [1][2] 角标；底部展示引用来源（文件名+页码）
 - 参考：工单备注给出的 HKUDS/RAG-Anything（`https://github.com/HKUDS/RAG-Anything`）。**注意其依赖 MinerU，纯 CPU 跑 OCR 极慢**；开发期用 PyMuPDF/python-docx/python-pptx/openpyxl 自研解析，公式与复杂版面降级为"保留原文位置 + 引用回显"
 - 验收：上传指定 PDF 后提问，返回带正确引用的流式答案；能检索到指定页的表格
+
+> **2026-09-28 追加（公式渲染收口 + 知识库埋公式）**：
+> - **前端渲染只有一个入口**：`frontend/src/utils/markdown.js` 的 `renderMarkdown()`。
+>   6 个渲染点（问答页 / 讲课页 `/lecture` / `CitationList.vue` 的引用卡与「查看原文」/
+>   错题本 / 练习页 / 备课预览）**全部改调它，不要再各写一份 `marked.parse`**——
+>   之前 6 份里 5 份没有公式，`\frac` 会原样显示成源码。样式在同目录 `styles/markdown.css`。
+> - **两条不变量**（写在 `markdown.js` 顶部，改动前先读）：公式必须**先抽占位符再进 marked**；
+>   行内 `$..$` 必须过 `looksLikeMath` 守卫（与 `services/tts.py::_looks_like_math` 是同一条规则，
+>   **改一处要连另一处一起改**）。
+> - **种子 PDF 里埋 LaTeX 只能用 base-14 拉丁字体**（`seed_kb.insert_tex`）：
+>   `china-s` 会让 PyMuPDF 抽文本时逐字插空格，`\frac` → `\ f r a c`，且**不报错**。
+> - 证据：`capture_evidence.py --stage kb-formula`，**12/12 断言**，截图在 `docs/evidence/知识库公式/`。
 
 ### 工单 19（2 人日）· 个性化学习推荐
 
@@ -402,3 +417,13 @@ UPLOAD_DIR=./uploads
    §四之三/四之四 里 80/80、14/14 的成绩是改造**之前**跑的。**未修，属技术债**。
    教训：**重命名一批 CSS 类时要 `grep` 取证脚本**——选择器是跨文件的隐式契约，
    编译器一句都不报。新增的 `chat-formula` 用的是当前选择器（已实跑 8/8）。
+11. **取证脚本的截图编号是「按工单号连续」的**（2026-09-28 新增）：两条场景若共用同一个
+    ticket（目录），**各跑各的时候会各出现一套 `01-`/`02-`**。文件名不同故不会真覆盖，
+   但同一目录里两套编号看着就是错的。**跨工单的场景一律独立成目录**
+   （`角色门禁` / `公式渲染` / `知识库公式` 都是这么来的），别为了"放一起好找"而共用一个。
+12. **`backdrop-filter` 会给 `position: fixed` 的后代当包含块**（2026-09-28 新增）：
+   问答页引用抽屉 `.cites-panel` 带 `backdrop-filter: blur(14px)`，挂在它里面的
+   「查看原文」`el-dialog` 于是**以 366px 宽的面板为准居中，右侧 361px 甩出视口**（实测）。
+   已用 `append-to-body` 修掉。**同一组件在检索页没问题**——那里没有这个祖先，
+   所以"我这儿好的、你那儿坏的"能同时成立。断言要写成**元素完整落在视口内**
+   （`rect.right <= innerWidth`），只断"弹层打开了"抓不到这类问题。
