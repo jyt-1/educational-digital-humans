@@ -195,6 +195,11 @@ UPLOAD_DIR=./uploads
 - 接口：`POST /api/auth/register`、`POST /api/auth/login`（返回 JWT）、`GET /api/auth/me`
 - 依赖注入：`get_current_user()`、`require_role('teacher')`
 - 公共知识库不校验归属；私有知识库所有读写强制按 `user_id` 过滤
+- **前端角色门禁的唯一声明处是路由 `meta.roles`**（2026-09-28 起）：侧边栏由它派生
+  （`App.vue`），守卫按它拦截（`router/index.js`），**不要再在菜单或页面里手写
+  `v-if="isTeacher()"` 做可见性判断**——那正是"菜单按有没有页面渲染、后端按角色授权"
+  两套规则漂移的成因。`meta.title` 是顶栏标题、`meta.menu` 是菜单项文字（缺省取 title）；
+  admin 在 `hasRole()` 里与后端 `require_role` 一致地放行。新增页面时**只加一条 meta.roles**。
 
 ### 工单 16（1 人日）· 需求分析与功能设计 —— 纯文档
 
@@ -376,3 +381,7 @@ UPLOAD_DIR=./uploads
 9. **仓库无前端单测框架**（v1.6 新增，2026-09-27 更正）：`frontend/package.json` 无 vitest/jest，前端正确性只能靠 `npm run build` + `capture_evidence.py` 兜底。
    ⚠️ **但别据此以为工单 23 的前端没验证过**（2026-09-27 更正）：`class-insight` 场景有 **11 条断言**覆盖看板渲染、ECharts 真出图（`canvas >= 2`）、学生清单 30 行、跳转后学情预览正文——**是机器验证过的**。
    **真正没有自动化验证的是工单 22 的前端**（只有 6 条布局类断言 + 3 张截图；"倾听中"是人工演示项），见第 7 条。
+   📌 **前端并非只能靠"看"**（2026-09-28 补充）：侧边栏角色门禁有独立场景 `--only gate`，
+   **20 条断言**覆盖两个角色各自的菜单可见项 + 硬敲对方专属 URL 被弹回，证据在
+   `docs/evidence/角色门禁/`（**故意不塞进某个工单的连续编号流**——它跨 17/19/23）。
+   该场景**只读不写库**，跑完 MD5 与跑前一致即证明。
