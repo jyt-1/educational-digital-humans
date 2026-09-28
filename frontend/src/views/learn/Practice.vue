@@ -259,10 +259,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { marked } from 'marked'
 
 import { getExam, getPractice, listKnowledgePoints, submitAnswer, submitExam } from '@/api/learn'
 import { authState } from '@/store/user'
+import { renderMarkdown } from '@/utils/markdown'
 
 const route = useRoute()
 const router = useRouter()
@@ -292,13 +292,9 @@ const streak = computed(() => {
 const DIFF_TAGS = { 简单: 'success', 中等: 'warning', 困难: 'danger' }
 const difficultyTag = (difficulty) => DIFF_TAGS[difficulty] ?? 'info'
 
+// 题干与解析来自工单17 生成的试题，含 LaTeX，走公共渲染器才能出公式
 function render(text) {
-  if (!text) return ''
-  try {
-    return marked.parse(String(text), { breaks: true })
-  } catch {
-    return String(text)
-  }
+  return renderMarkdown(text)
 }
 
 // "A. 链式法则" → "A"。后端判分两种写法都认，这里统一取字母，避免同一题出现两种答案格式

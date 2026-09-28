@@ -1,0 +1,27 @@
+/* [工单18] 人工智能NLP-Agent数字人项目-教育智能体-智能助教任务 —— 公式渲染公共样式 */
+/*
+ * 由 `utils/markdown.js` import，6 个渲染点共用（问答页 / 讲课页 / 引用卡 / 错题本 /
+ * 练习页 / 备课预览）。
+ *
+ * 用**全局选择器而非组件 scoped**：`.tex-pending` 是我们自己生成的类，`.katex-display`
+ * 是 KaTeX 的固定类名，都不可能与页面样式撞名；放进每个组件的 `<style scoped>` 里则要
+ * 写 6 遍 `:deep()`，漏一处那个页面就少一层兜底。
+ */
+
+/* 长公式在窄容器（引用弹层、答题卡、侧栏气泡）里必然溢出，给一条横向滚动兜底，
+   而不是让它撑破容器把整页挤歪 */
+.katex-display {
+  margin: 6px 0;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 流式期间的公式占位：灰色源码片，写完即换成真公式（见 markdown.js::renderTex） */
+.tex-pending {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #f4f6f9;
+  color: #7a8290;
+  font-size: 0.92em;
+}

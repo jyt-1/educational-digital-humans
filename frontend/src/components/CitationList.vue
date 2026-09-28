@@ -43,7 +43,11 @@
       </div>
     </div>
 
-    <el-dialog v-model="originVisible" title="原文片段" width="760px">
+    <!-- append-to-body 不能省：问答页的引用抽屉 `.cites-panel` 带 backdrop-filter，
+         它会给 position:fixed 的后代当**包含块**——弹层于是以 366px 宽的面板为准居中，
+         右侧 361px 直接甩出视口（实测 left=1281，本该 460）。挂到 body 才按视口居中。
+         检索页没这个祖先，表现正常，所以这个坑只在问答页露头。 -->
+    <el-dialog v-model="originVisible" title="原文片段" width="760px" append-to-body>
       <div v-if="originChunk" class="rendered-md origin-body" v-html="render(originChunk.content)"></div>
       <template #footer>
         <span v-if="originChunk" class="origin-meta">
@@ -58,9 +62,9 @@
 
 <script setup>
 import { onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { marked } from 'marked'
 
 import { fetchChunkImage, getChunk } from '@/api/kb'
+import { renderMarkdown } from '@/utils/markdown'
 
 const props = defineProps({
   citations: { type: Array, default: () => [] },
@@ -92,13 +96,10 @@ function typeTag(type) {
   return TYPE_TAGS[type] ?? 'primary'
 }
 
+// 引用卡摘要与「查看原文」弹层共用：切块正文里可能带 LaTeX（工单18 的公式块），
+// 走公共渲染器才能出公式而不是一串 `\frac`
 function render(text) {
-  if (!text) return ''
-  try {
-    return marked.parse(String(text), { breaks: true })
-  } catch {
-    return String(text)
-  }
+  return renderMarkdown(text)
 }
 
 // 检索结果里片段字段叫 snippet，切块详情里叫 content，两者兼容

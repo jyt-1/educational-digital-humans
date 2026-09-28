@@ -250,7 +250,6 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { marked } from 'marked'
 
 import RelatedPanel from '@/components/RelatedPanel.vue'
 import {
@@ -260,6 +259,7 @@ import {
   listKnowledgePoints,
   listMistakes,
 } from '@/api/learn'
+import { renderMarkdown } from '@/utils/markdown'
 
 const route = useRoute()
 const router = useRouter()
@@ -284,13 +284,9 @@ const STATUS_TEXT = { done: '已分析', analyzing: '分析中', failed: '分析
 const statusTag = (status) => STATUS_TAGS[status] ?? 'info'
 const statusText = (status) => STATUS_TEXT[status] ?? '待分析'
 
+// 题干与 AIGC 解析都是 LLM 生成的数学内容，走公共渲染器才能出公式
 function render(text) {
-  if (!text) return ''
-  try {
-    return marked.parse(String(text), { breaks: true })
-  } catch {
-    return String(text)
-  }
+  return renderMarkdown(text)
 }
 
 // 列表里的题干只做纯文本预览：表格单元格里跑 Markdown 会撑破行高

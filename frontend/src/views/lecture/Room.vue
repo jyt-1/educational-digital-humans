@@ -82,10 +82,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { InfoFilled, VideoPause, VideoPlay } from '@element-plus/icons-vue'
-import katex from 'katex'
-import 'katex/dist/katex.min.css'
 
 import { listLectureCourses } from '@/api/lecture'
+import { renderMarkdown } from '@/utils/markdown'
 
 // 多课程：列表来自 GET /api/lecture/courses（内置静态课 + 教师成课产物），base 决定资源前缀
 const loading = ref(true)
@@ -124,20 +123,10 @@ function onVideoError() {
 const pages = computed(() => course.value?.pages || [])
 const currentSeg = computed(() => timeline.value[currentIdx.value] || null)
 
-// ---- 渲染：先替换 $...$ 为 KaTeX HTML，再交给 marked（保留内联 HTML） ----
-function renderBody(raw) {
-  if (!window.__marked) return ''
-  const withTex = String(raw || '').replace(/\$([^$]+)\$/g, (_, tex) => {
-    try {
-      return katex.renderToString(tex.trim(), { throwOnError: false, displayMode: false })
-    } catch {
-      return tex
-    }
-  })
-  return window.__marked.parse(withTex)
-}
-
-const renderedBodies = computed(() => pages.value.map((p) => renderBody(p.body)))
+// 课件页正文 → HTML。与问答页/引用卡/错题本/练习页/备课预览共用 `@/utils/markdown`。
+// 旧实现在这里自己拼了个只认 `$..$` 的正则，`$$x$$` 会渲染成「$ + 行内 x + $」——
+// 备课时生成的独立成行公式全是 `$$..$$`，正好是它唯一漏掉的那种。
+const renderedBodies = computed(() => pages.value.map((p) => renderMarkdown(p.body)))
 
 function resetPlayer() {
   progress.value = 0
@@ -229,11 +218,6 @@ function fmt(s) {
 }
 
 onMounted(async () => {
-  // marked 挂到非响应式全局（与 speechQueue 单例同思路）
-  if (!window.__marked) {
-    const { marked } = await import('marked')
-    window.__marked = marked
-  }
   try {
     courses.value = await listLectureCourses()
   } catch {

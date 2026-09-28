@@ -173,7 +173,6 @@
 <script setup>
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { marked } from 'marked'
 import { useRoute, useRouter } from 'vue-router'
 
 import {
@@ -184,6 +183,7 @@ import {
   updatePlan,
 } from '@/api/lesson'
 import QuestionEditor from '@/components/QuestionEditor.vue'
+import { renderMarkdown } from '@/utils/markdown'
 
 const route = useRoute()
 const router = useRouter()
@@ -227,7 +227,9 @@ const metaLine = computed(
     '—',
 )
 
-const renderedRaw = computed(() => marked.parse(content.raw || ''))
+// 教案正文含公式（如损失函数、梯度更新式），与讲课页/问答页共用同一个渲染器，
+// 保证「这里预览成什么样」与「成课之后讲成什么样」是同一份排版
+const renderedRaw = computed(() => renderMarkdown(content.raw))
 
 /** 幻灯片要点：编辑时用「每行一条」的文本，保存前拆回数组 */
 function bulletsToText(bullets) {

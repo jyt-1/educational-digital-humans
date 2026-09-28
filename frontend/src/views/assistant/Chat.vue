@@ -166,15 +166,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Microphone, Plus, Promotion, VideoPause } from '@element-plus/icons-vue'
-import katex from 'katex'
-import 'katex/dist/katex.min.css'
-import { marked } from 'marked'
 
 import { chatStream, deleteConversation, getConversation, listConversations } from '@/api/assistant'
 import { createAsr, isAsrSupported } from '@/audio/asr'
 import AvatarSpotlight from '@/components/AvatarSpotlight.vue'
 import CitationList from '@/components/CitationList.vue'
 import { initAvatar, avatarState, speech } from '@/store/avatar'
+import { renderMarkdown } from '@/utils/markdown'
 
 const route = useRoute()
 
@@ -229,85 +227,21 @@ function openCites() {
 
 // ---------------------------------------------------------------- 渲染
 
-marked.setOptions({ breaks: true, gfm: true })
-
-// 公式匹配：先 $$..$$ / \[..\]（行间）再 $..$ / \(..\)（行内）。**顺序不能反**，
-// 否则 `$$x$$` 会被行内规则从第一个 $ 就开始吞，切出半个公式。
-// 行内一组用 [^$\n] 限制不跨行——跨行的 `$` 基本是散文里被误配的一对。
-const TEX_SPAN_RE = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+?)\$/g
-// 占位符用 U+0000 包裹：Markdown 不碰控制字符，marked 会原样透出到 HTML 里
-const TEX_SLOT = '\u0000'
-
-// 与后端 `tts.py::_looks_like_math` 是**同一条守卫**：行内 $..$ 只在「确实像公式」
-// 时才处理，否则散文里成对的美元号会被吃掉。含汉字判为散文（「价格 $5 到 $10」）；
-// 不含汉字则要求有 LaTeX 特征或短到不可能是价格区间（`$x$`、`$0.01$`）。
-// 两种语言没法共用代码，**改动时请连同 tts.py 一起改**——页面渲染与语音朗读必须
-// 给出同一个判断，否则会出现「页面把价格渲染成公式、语音却照常念」的错位。
-const CJK_RE = /[一-鿿]/
-const MATH_SIGNAL_RE = /[\\^_=]/
-const SHORT_TOKEN_RE = /^[A-Za-z0-9.,]{1,5}$/
-
-function looksLikeMath(tex) {
-  if (CJK_RE.test(tex)) return false
-  return MATH_SIGNAL_RE.test(tex) || SHORT_TOKEN_RE.test(tex.trim())
-}
-
-function escapeHtml(text) {
-  return String(text).replace(
-    /[&<>"]/g,
-    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch],
-  )
-}
-
-/** 一段公式 → HTML。`settled=false`（流式进行中）时只占位成源码，见 renderAnswer 注释 */
-function renderTex(tex, display, settled) {
-  if (settled) {
-    try {
-      return katex.renderToString(tex.trim(), { throwOnError: false, displayMode: display })
-    } catch {
-      /* 落到下面的源码兜底 */
-    }
-  }
-  return `<code class="tex-pending">${escapeHtml(tex.trim())}</code>`
-}
-
 /**
- * 把答案渲染成 HTML：Markdown + KaTeX 公式 + 可点击的 [n] 角标。
+ * 答案 → HTML：Markdown + KaTeX 公式 + 可点击的 [n] 角标。
  *
- * 公式必须**先抽成占位符再进 marked**，两步都不能省：
- * - 直接交给 marked：`$x_1$` 的 `_` 会被当斜体、`$a*b$` 的 `*` 会被当强调，公式被拆烂；
- * - 先渲染成 KaTeX HTML 再进 marked：KaTeX 输出的 HTML 标签会被 marked 转义成源码。
- *
- * 流式期间**不渲染 KaTeX**，只把公式占位成灰色源码片：半截公式按 HTML 渲染会闪红字，
- * 且每个 delta 都重排一遍 KaTeX 太贵（此刻正逐字追加）。`done` 一到（streaming=false）
- * 才换成真公式——代价是写完瞬间有一次「源码 → 公式」的跳变，这是刻意的取舍。
+ * 渲染本身与其余 5 个渲染点（讲课页 / 引用卡 / 错题本 / 练习页 / 备课预览）
+ * 共用 `@/utils/markdown`，这里只补两件问答页独有的事：
+ * - `settled`：流式未结束时公式只占位成源码片，`done` 一到才换成真公式；
+ * - `transformHtml`：把正文里的 `[1]` 换成可点角标。**必须走这个钩子**，
+ *   即「marked 之后、公式还原之前」——晚了正则就会命中 KaTeX 生成的 HTML。
  */
 function renderAnswer(msg) {
-  if (!msg.content) return ''
-  const settled = !msg.streaming // 流式未结束：公式只占位、不渲染
-  const slots = []
-  const withSlots = msg.content.replace(TEX_SPAN_RE, (whole, d1, d2, d3, inline) => {
-    const display = inline === undefined
-    const tex = (display ? (d1 ?? d2 ?? d3) : inline) || ''
-    if (!display && !looksLikeMath(tex)) return whole
-    slots.push(renderTex(tex, display, settled))
-    return `${TEX_SLOT}${slots.length - 1}${TEX_SLOT}`
+  return renderMarkdown(msg.content, {
+    settled: !msg.streaming,
+    transformHtml: (html) =>
+      html.replace(/\[(\d{1,2})\](?!\()/g, '<sup class="cite-badge" data-index="$1">[$1]</sup>'),
   })
-
-  let html
-  try {
-    html = marked.parse(withSlots)
-  } catch {
-    return escapeHtml(msg.content) // 兜底也要干净：占位符还原不了，就退回纯文本
-  }
-  // 角标：已是 markdown 链接的 [x](y) 不处理
-  html = html.replace(/\[(\d{1,2})\](?!\()/g, '<sup class="cite-badge" data-index="$1">[$1]</sup>')
-  // 行间公式被 marked 包进 <p> 会多一层段落外边距，单独成段时把壳剥掉
-  html = html.replace(
-    new RegExp(`<p>\\s*${TEX_SLOT}(\\d+)${TEX_SLOT}\\s*</p>`, 'g'),
-    (whole, i) => (slots[Number(i)].startsWith('<span class="katex-display') ? slots[Number(i)] : whole),
-  )
-  return html.replace(new RegExp(`${TEX_SLOT}(\\d+)${TEX_SLOT}`, 'g'), (_, i) => slots[Number(i)])
 }
 
 async function onAnswerClick(event) {
@@ -731,25 +665,10 @@ onBeforeUnmount(() => {
   color: #f56c6c;
 }
 
+/* 公式本体、行间溢出兜底、流式占位片三处的样式在 styles/markdown.css（6 处渲染点共用），
+   这里只留问答页独有的角标样式 */
 .thread-md :deep(.katex) {
   font-size: 1.05em;
-}
-
-/* 长公式在窄气泡里必然溢出，给一条横向滚动兜底而不是让它撑破侧栏 */
-.thread-md :deep(.katex-display) {
-  margin: 6px 0;
-  padding-bottom: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-/* 流式期间的公式占位：灰色源码片，写完即换成真公式 */
-.thread-md :deep(.tex-pending) {
-  padding: 0 4px;
-  border-radius: 4px;
-  background: #f4f6f9;
-  color: #7a8290;
-  font-size: 0.92em;
 }
 
 .thread-md :deep(.cite-badge) {
