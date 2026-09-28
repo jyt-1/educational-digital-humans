@@ -79,7 +79,7 @@ import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { login, register } from '@/api/auth'
-import { setAuth } from '@/store/user'
+import { homePath, setAuth } from '@/store/user'
 
 const route = useRoute()
 const router = useRouter()
@@ -98,7 +98,8 @@ const registerForm = reactive({
 function afterLogin(data) {
   setAuth(data.access_token, data.user)
   ElMessage.success(`欢迎，${data.user.display_name || data.user.username}`)
-  router.push(route.query.redirect || '/lesson')
+  // 无 redirect 时按角色落地：学生落到 /lesson 会被守卫弹回，多一次往返与一条提示
+  router.push(route.query.redirect || homePath())
 }
 
 async function handleLogin() {

@@ -1,4 +1,7 @@
 <!-- [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 根组件（侧边栏导航四模块，工单18/19 增补子菜单） -->
+<!-- [工单17] 人工智能NLP-Agent数字人项目-教育智能体-智能备课任务 —— 追加：侧边栏角色门禁（覆盖工单17/19/23）
+     菜单由路由 `meta`（group / title / hidden / roles）派生，不再手写可见性判断：
+     页面归属与角色门禁只有一处声明，菜单与守卫不会各自漂移。 -->
 <template>
   <router-view v-if="isLoginPage" />
 
@@ -10,41 +13,17 @@
       </div>
       <el-menu
         :default-active="activeMenu"
-        :default-openeds="['lesson', 'assistant', 'lecture', 'learn', 'teach']"
+        :default-openeds="openedGroups"
         background-color="#001529"
         text-color="rgba(255,255,255,0.72)"
         active-text-color="#ffffff"
         router
       >
-        <el-sub-menu index="lesson">
-          <template #title><span>智能备课</span></template>
-          <el-menu-item index="/lesson">内容生成</el-menu-item>
-          <el-menu-item index="/lesson/plans">我的备课</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="assistant">
-          <template #title><span>智能助教</span></template>
-          <el-menu-item index="/assistant/chat">智能问答</el-menu-item>
-          <el-menu-item index="/assistant/kb">知识库</el-menu-item>
-          <el-menu-item index="/assistant/search">检索调试</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="lecture">
-          <template #title><span>虚拟教室</span></template>
-          <el-menu-item index="/lecture">数字人讲课</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="learn">
-          <template #title><span>个性化学习</span></template>
-          <el-menu-item index="/learn/dashboard">学习仪表盘</el-menu-item>
-          <el-menu-item index="/learn/path">学习路径</el-menu-item>
-          <el-menu-item index="/learn/practice">练习与试卷</el-menu-item>
-          <el-menu-item index="/learn/mistakes">错题本</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu v-if="isTeacher()" index="teach">
-          <template #title><span>班级学情</span></template>
-          <el-menu-item index="/teach/class">我的班级</el-menu-item>
+        <el-sub-menu v-for="group in menuGroups" :key="group.key" :index="group.key">
+          <template #title><span>{{ group.title }}</span></template>
+          <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path">
+            {{ item.title }}
+          </el-menu-item>
         </el-sub-menu>
       </el-menu>
     </aside>
@@ -72,7 +51,16 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { authState, clearAuth, isTeacher } from '@/store/user'
+import { authState, clearAuth, hasRole } from '@/store/user'
+
+// 分组顺序是导航设计，不属于路由事实，故在此显式声明；`title` 必须与路由 meta.group 逐字一致。
+const MENU_GROUPS = [
+  { key: 'lesson', title: '智能备课' },
+  { key: 'assistant', title: '智能助教' },
+  { key: 'lecture', title: '虚拟教室' },
+  { key: 'learn', title: '个性化学习' },
+  { key: 'teach', title: '班级学情' },
+]
 
 const route = useRoute()
 const router = useRouter()
@@ -80,10 +68,33 @@ const router = useRouter()
 const isLoginPage = computed(() => route.name === 'login')
 const pageTitle = computed(() => route.meta.title || '育智平台')
 
-// 详情页高亮其所属列表菜单
+// 用 router.options.routes（声明顺序）而不是 getRoutes()——后者顺序无保证，
+// 菜单项会变成按字典序排（仪表盘/错题本/路径/练习），与设计不符。
+const menuGroups = computed(() =>
+  MENU_GROUPS.map((group) => ({
+    key: group.key,
+    title: group.title,
+    items: router.options.routes
+      .filter(
+        (record) =>
+          record.meta?.group === group.title &&
+          !record.meta?.hidden &&
+          record.meta?.title &&
+          hasRole(record.meta?.roles),
+      )
+      .map((record) => ({ path: record.path, title: record.meta.menu || record.meta.title })),
+  })).filter((group) => group.items.length > 0),
+)
+
+const openedGroups = computed(() => menuGroups.value.map((group) => group.key))
+
+// 详情页（如 /lesson/plans/5，meta.hidden）高亮其所属列表项——取最长前缀命中的可见菜单项。
 const activeMenu = computed(() => {
-  if (route.path.startsWith('/lesson/plans')) return '/lesson/plans'
-  return route.path
+  const paths = menuGroups.value.flatMap((group) => group.items.map((item) => item.path))
+  const hit = paths
+    .filter((path) => route.path === path || route.path.startsWith(`${path}/`))
+    .sort((a, b) => b.length - a.length)[0]
+  return hit || route.path
 })
 
 function handleLogout() {
